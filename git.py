@@ -20,26 +20,33 @@ def connect_to_github(repository_name:str):
         print(f"repo desc: ", repo.description)
 
 
-        pull_requests = repo.get_pulls(
-            state="open",
-            sort="updated",
-            direction="desc"
-        )
+        # pull_requests = repo.get_pulls(
+        #     state="open",
+        #     sort="updated",
+        #     direction="desc"
+        # )
 
-        for index, pr in enumerate(pull_requests):
-            if index == 5: # first 5
-                break
+        # for index, pr in enumerate(pull_requests):
+        #     if index == 5: # first 5
+        #         break
 
-            author = pr.user.login
-            files_changed = pr.changed_files
-            title = pr.title
-            number = pr.number
+        #     author = pr.user.login
+        #     files_changed = pr.changed_files
+        #     title = pr.title
+        #     number = pr.number
 
-            print(f" Pull request details: author: {author}, title: {title},number: {number}, files_changed: {files_changed}")
+        #     print(f" Pull request details: author: {author}, title: {title},number: {number}, files_changed: {files_changed}")
 
-        # pullr = repo.get_pull()
-        # for changed_files in pullr.get_files():
-        #     print("File:", changed_files.filename)
+        pullr = repo.get_pull(336766)
+        for changed_file in pullr.get_files():
+            print("File:", changed_file.filename)
+            print("Status:", changed_file.status)
+            print("Additions:", changed_file.additions)
+            print("Deletions:", changed_file.deletions)
+            print("\nPatch:")
+
+            print(changed_file.patch)
+            break # prints only the first changed file
 
     except GithubException as error:
         print(f"GitHub API error: {error.status}")
