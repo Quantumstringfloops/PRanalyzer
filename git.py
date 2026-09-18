@@ -19,7 +19,22 @@ def connect_to_github(repository_name:str):
         print(f"repo name :", repo.name)
         print(f"repo desc: ", repo.description)
 
-    
+
+        pull_requests = repo.get_pulls(
+            state="open",
+            sort="updated",
+            direction="desc"
+        )
+
+        for index, pr in enumerate(pull_requests):
+            if index == 10:
+                break
+
+            author = pr.user.login
+            files_changed = pr.changed_files
+            title = pr.title
+
+            print(f" Pull request details: author: {author}, title: {title}, files_changed: {files_changed}")
 
     except GithubException as error:
         print(f"GitHub API error: {error.status}")
