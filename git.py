@@ -1,6 +1,6 @@
 import argparse
 import os
-from github import Github, Auth
+from github import Github
 from github.GithubException import GithubException
 
 
@@ -16,8 +16,10 @@ def connect_to_github(repository_name:str):
         repo = github.get_repo(repository_name)
 
         print("Connection succesful \n")
-        print(f"repo name : {repo._full_name}")
-        print(f"repo desc: {repo.description}")
+        print(f"repo name :", repo.name)
+        print(f"repo desc: ", repo.description)
+
+    
 
     except GithubException as error:
         print(f"GitHub API error: {error.status}")
