@@ -27,14 +27,19 @@ def connect_to_github(repository_name:str):
         )
 
         for index, pr in enumerate(pull_requests):
-            if index == 10:
+            if index == 5: # first 5
                 break
 
             author = pr.user.login
             files_changed = pr.changed_files
             title = pr.title
+            number = pr.number
 
-            print(f" Pull request details: author: {author}, title: {title}, files_changed: {files_changed}")
+            print(f" Pull request details: author: {author}, title: {title},number: {number}, files_changed: {files_changed}")
+
+        # pullr = repo.get_pull()
+        # for changed_files in pullr.get_files():
+        #     print("File:", changed_files.filename)
 
     except GithubException as error:
         print(f"GitHub API error: {error.status}")
