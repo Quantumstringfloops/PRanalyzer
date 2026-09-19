@@ -43,3 +43,15 @@ print(changed_file.filename)
 #         default=None,
 #         description="Unified diff returned by GitHub",
 #     )
+
+# MODEL VALIDATE
+
+file_data = {
+    "filename": "src/main.py",
+    "status": "modified",
+    "additions": "5",
+    "deletions": 2,
+    "patch": "@@ -1,2 +1,5 @@",
+} 
+
+file_check = ChangedFile.model_validate(file_data)
