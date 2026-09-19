@@ -1,21 +1,21 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
-class ChangedFile(BaseModel):
-    filename: str
-    status:str
-    additions: int
-    deletions: int
-    patch: str | None = None
+# class ChangedFile(BaseModel):
+#     filename: str
+#     status:str
+#     additions: int
+#     deletions: int
+#     patch: str | None = None
 
 
-changed_file = ChangedFile(
-    filename="/src/app.py",
-    status= "updated",
-    additions=5,
-    deletions=2
-)
+# changed_file = ChangedFile(
+#     filename="/src/app.py",
+#     status= "updated",
+#     additions=5,
+#     deletions=2
+# )
 
-print(changed_file.filename)
+# print(changed_file.filename)
 
 
 
@@ -46,18 +46,46 @@ print(changed_file.filename)
 
 # MODEL VALIDATE
 
-file_data = {
-    "filename": "src/main.py",
-    "status": "modified",
-    "additions": "5",
-    "deletions": 2,
-    "patch": "@@ -1,2 +1,5 @@",
-} 
+# file_data = {
+#     "filename": "src/main.py",
+#     "status": "modified",
+#     "additions": "5",
+#     "deletions": 2,
+#     "patch": "@@ -1,2 +1,5 @@",
+# } 
 
-file_check = ChangedFile.model_validate(file_data)
-print(file_check)
+# file_check = ChangedFile.model_validate(file_data)
+# print(file_check)
 
-# MODEL DUMP 
+# # MODEL DUMP 
+# # Creates a python dictinary
 
-result = ChangedFile.model_dump(changed_file)
-print(result)
+# result = ChangedFile.model_dump(changed_file)
+# print(result)
+
+#FIELD VALIDATOR CHECKS OR TRANFORMS A CERTAIN FIELD
+class ChangedFile(BaseModel):
+    filename: str = Field(min_length=1)
+    status: str
+    additions: int = Field(default=0, ge=0)
+    deletions: int = Field(default=0, ge=0)
+    patch: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        normalized_value = value.strip().lower()
+
+        allowed_statuses = {
+            "added",
+            "modified",
+            "removed",
+            "renamed",
+        }
+
+        if normalized_value not in allowed_statuses:
+            raise ValueError(
+                f"Unsupported file status: {value}"
+            )
+
+        return normalized_value
