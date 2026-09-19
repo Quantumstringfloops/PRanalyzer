@@ -3,6 +3,27 @@ import os
 from github import Github
 from github.GithubException import GithubException
 
+def analyze_patch(patch):
+    added_lines = []
+    removed_lines = []
+
+    if not patch : 
+        return added_lines, removed_lines
+
+    for line in patch.splitlines():
+        if line.startswith("+++"):
+            continue
+        if line.startswith("---"):
+            continue
+
+
+        if line.startswith("+"):
+            added_lines.append(line[1:])
+        elif line.startswith("-"): 
+            removed_lines.append(line[1:])
+
+
+    return added_lines,removed_lines
 
 def connect_to_github(repository_name:str):
     # Only for private repos
@@ -20,22 +41,22 @@ def connect_to_github(repository_name:str):
         print(f"repo desc: ", repo.description)
 
 
-        # pull_requests = repo.get_pulls(
-        #     state="open",
-        #     sort="updated",
-        #     direction="desc"
-        # )
+        pull_requests = repo.get_pulls(
+            state="open",
+            sort="updated",
+            direction="desc"
+        )
 
-        # for index, pr in enumerate(pull_requests):
-        #     if index == 5: # first 5
-        #         break
+        for index, pr in enumerate(pull_requests):
+            if index == 5: # first 5
+                break
 
-        #     author = pr.user.login
-        #     files_changed = pr.changed_files
-        #     title = pr.title
-        #     number = pr.number
+            author = pr.user.login
+            files_changed = pr.changed_files
+            title = pr.title
+            number = pr.number
 
-        #     print(f" Pull request details: author: {author}, title: {title},number: {number}, files_changed: {files_changed}")
+            print(f" Pull request details: author: {author}, title: {title},number: {number}, files_changed: {files_changed}")
 
         pullr = repo.get_pull(336766)
         for changed_file in pullr.get_files():
@@ -45,7 +66,16 @@ def connect_to_github(repository_name:str):
             print("Deletions:", changed_file.deletions)
             print("\nPatch:")
 
-            print(changed_file.patch)
+            added ,removed = analyze_patch(changed_file.patch)
+
+            print("Added: ")
+            for line in added:
+                print("+", line)
+
+            print("Removed: ")
+            for line in removed:
+                print("-", line)
+
             break # prints only the first changed file
 
     except GithubException as error:
