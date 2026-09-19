@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field, field_validator
+from typing import Self
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # class ChangedFile(BaseModel):
 #     filename: str
@@ -71,6 +73,7 @@ class ChangedFile(BaseModel):
     deletions: int = Field(default=0, ge=0)
     patch: str | None = None
 
+    #FIELD VALIDATOR CHECKS OR TRANFORMS A CERTAIN FIELD
     @field_validator("status")
     @classmethod
     def validate_status(cls, value: str) -> str:
@@ -89,6 +92,17 @@ class ChangedFile(BaseModel):
             )
 
         return normalized_value
+
+    # Validation for multiple fields especially for objects 
+    # Example is to check if file is changd by checking addition and deletion atleast 1 or more
+    @model_validator(mode="after")
+    def validate_changes(self) -> Self:
+        if self.additions == 0 and self.deletions == 0:
+            raise ValueError(
+                "Changed file has no additions or deletions"
+            )
+
+        return self
 
 file = ChangedFile(
     filename="main.py",
