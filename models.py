@@ -55,3 +55,9 @@ file_data = {
 } 
 
 file_check = ChangedFile.model_validate(file_data)
+print(file_check)
+
+# MODEL DUMP 
+
+result = ChangedFile.model_dump(changed_file)
+print(result)
