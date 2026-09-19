@@ -89,3 +89,12 @@ class ChangedFile(BaseModel):
             )
 
         return normalized_value
+
+file = ChangedFile(
+    filename="main.py",
+    status="  MODIFIED  ",
+    additions=2,
+    deletions=1,
+)
+
+print(file.status)
