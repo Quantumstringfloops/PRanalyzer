@@ -1,4 +1,4 @@
-from os import Path
+from pathlib import Path
 import tree_sitter_python as tspython
 from tree_sitter import Language, Parser
 
@@ -41,6 +41,7 @@ def walk(node):
         name_node = node.child_by_field_name("name")
         if name_node is not None: 
             name = source[name_node.start_byte:name_node.end_byte]
+            print(name.decode("utf-8"))
 
 
     for child in node.children:
@@ -48,3 +49,7 @@ def walk(node):
 
 print("Functions found: ")
 walk(tree2.root_node)
+
+# function walking using cursor
+
+
