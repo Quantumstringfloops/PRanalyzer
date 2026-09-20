@@ -20,3 +20,10 @@ print(tree)
 
 root_node = tree.root_node
 print(root_node) 
+
+
+# WALKING SYNTAX TREES
+# USE cursor method
+
+cursor = tree.walk()
+assert cursor.node.type == "module"
