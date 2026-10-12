@@ -92,29 +92,6 @@ def call_openai() -> str:
     return response.output_text
 
 
-def call_anthropic() -> str:
-    client = Anthropic()
-
-    response = client.messages.create(
-        model=os.environ["ANTHROPIC_MODEL"],
-        max_tokens=1500,
-        system=SYSTEM_PROMPT,
-        messages=[
-            {
-                "role": "user",
-                "content": USER_MESSAGE,
-            }
-        ],
-
-        # Intentionally no output_config JSON schema.
-    )
-
-    return "".join(
-        block.text
-        for block in response.content
-        if block.type == "text"
-    )
-
 
 def parse_and_validate(raw_content: str) -> list[Suggestion]:
     # Manual JSON parsing, as required by the experiment.
@@ -146,17 +123,8 @@ def parse_and_validate(raw_content: str) -> list[Suggestion]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "provider",
-        choices=["openai", "anthropic"],
-    )
-    arguments = parser.parse_args()
-
-    if arguments.provider == "openai":
-        raw_content = call_openai()
-    else:
-        raw_content = call_anthropic()
+    
+    raw_content = call_openai()
 
     print("----- RAW RESPONSE START -----")
 
