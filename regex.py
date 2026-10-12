@@ -10,8 +10,9 @@ result = re.compile("r\d+")
 
 # search and findal
 
-match = re.search(r"\d+", text)
-print(match)
+match = re.search(r"\d+", text) #returns only the first match
+numbers = re.findall(r"\d+", text)
+print(numbers)
 print(match.group())
 
 
