@@ -90,7 +90,7 @@ def call_gemini() -> str:
     )
 
     response = client.models.generate_content(
-        model=os.environ["GEMINI_MODEL"],
+        model="gemini-3.6-flash",
         contents=USER_MESSAGE,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
@@ -138,7 +138,7 @@ def parse_and_validate(raw_content: str) -> list[Suggestion]:
 
 def main() -> None:
     
-    raw_content = call_openai()
+    raw_content = call_gemini()
 
     print("----- RAW RESPONSE START -----")
 
