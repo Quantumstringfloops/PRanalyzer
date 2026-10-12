@@ -35,3 +35,12 @@ try:
 
 except Exception as e:
     print(e)
+
+
+
+def find_all_todos(patch):
+    TODO_PATTERN = re.compile(
+        r"^.*\b(?:TODO|FIXME)\b.*$",
+        re.MULTILINE | re.IGNORECASE,
+    )
+    result = TODO_PATTERN.findall(patch)

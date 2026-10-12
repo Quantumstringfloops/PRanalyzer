@@ -2,6 +2,7 @@ import argparse
 import os
 from github import Github
 from github.GithubException import GithubException
+from regex import find_all_todos
 
 def analyze_patch(patch):
     added_lines = []
@@ -76,6 +77,9 @@ def connect_to_github(repository_name:str):
             # print("Removed: ")
             # for line in removed:
             #     print("-", line)
+
+            print("All the todos")
+            print(find_all_todos(changed_file.patch))
 
             break # prints only the first changed file
 
