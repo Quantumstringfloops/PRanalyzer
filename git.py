@@ -64,17 +64,18 @@ def connect_to_github(repository_name:str):
             print("Status:", changed_file.status)
             print("Additions:", changed_file.additions)
             print("Deletions:", changed_file.deletions)
-            print("\nPatch:")
+            print("Patch: ", changed_file.patch)
+            # print("\nPatch:")
 
-            added ,removed = analyze_patch(changed_file.patch)
+            # added ,removed = analyze_patch(changed_file.patch)
 
-            print("Added: ")
-            for line in added:
-                print("+", line)
+            # print("Added: ")
+            # for line in added:
+            #     print("+", line)
 
-            print("Removed: ")
-            for line in removed:
-                print("-", line)
+            # print("Removed: ")
+            # for line in removed:
+            #     print("-", line)
 
             break # prints only the first changed file
 
