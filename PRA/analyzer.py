@@ -44,3 +44,23 @@ RULES = [
         "Catch a specific exception instead of using bare except.",
     ),
 ]
+
+def analyze_file(changed_file = ChangedFile) -> list [Finding]:
+    findings: list[Finding] = []
+
+    if not changed_file.path:
+        return findings
+
+    for rule_name, pattern, suggestion in RULES: 
+        for match in pattern.finditer(changed_file.patch):
+            findings.append(
+                Finding(
+                    rule = rule_name,
+                    filename = changed_file.filename,
+                    code=match.group("code").strip(),
+                    suggestion=suggestion
+                )
+            )
+
+    return findings
+
