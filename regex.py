@@ -54,5 +54,12 @@ def find_cl(data):
         re.MULTILINE,
     )
 
-    result = CONSOLE_LOG.finditer(data)
-    return result.group()
+    for result in CONSOLE_LOG.finditer(data):
+        return result.group()
+
+
+find_cl("console.log(chicken)")
+find_all_todos("""normal code
+# TODO: validate the response
+value = 10  # FIXME this later
+methodology = test""")

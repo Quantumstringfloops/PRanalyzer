@@ -2,7 +2,7 @@ import argparse
 import os
 from github import Github
 from github.GithubException import GithubException
-from regex import find_all_todos
+from regex import find_all_todos, find_cl
 
 def analyze_patch(patch):
     added_lines = []
@@ -59,7 +59,7 @@ def connect_to_github(repository_name:str):
 
             print(f" Pull request details: author: {author}, title: {title},number: {number}, files_changed: {files_changed}")
 
-        pullr = repo.get_pull(336766)
+        pullr = repo.get_pull(341147)
         for changed_file in pullr.get_files():
             print("File:", changed_file.filename)
             print("Status:", changed_file.status)
@@ -77,8 +77,6 @@ def connect_to_github(repository_name:str):
             # print("Removed: ")
             # for line in removed:
             #     print("-", line)
-
-            
 
             break # prints only the first changed file
 
