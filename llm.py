@@ -7,6 +7,12 @@ from typing import Literal
 from anthropic import Anthropic
 from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError
+from dotenv import load_dotenv
+
+from google import genai
+from google.genai import types
+
+load_dotenv()
 
 
 class Suggestion(BaseModel):
@@ -78,18 +84,26 @@ Diff:
 """.strip()
 
 
-def call_openai() -> str:
-    client = OpenAI()
-
-    response = client.responses.create(
-        model=os.environ["OPENAI_MODEL"],
-        instructions=SYSTEM_PROMPT,
-        input=USER_MESSAGE,
-
-        # Intentionally no JSON mode or JSON schema.
+def call_gemini() -> str:
+    client = genai.Client(
+        api_key=os.environ["GEMINI_API_KEY"]
     )
 
-    return response.output_text
+    response = client.models.generate_content(
+        model=os.environ["GEMINI_MODEL"],
+        contents=USER_MESSAGE,
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+
+            # Intentionally no response_mime_type
+            # and no response_schema.
+        ),
+    )
+
+    if response.text is None:
+        raise RuntimeError("Gemini returned no text response")
+
+    return response.text
 
 
 
