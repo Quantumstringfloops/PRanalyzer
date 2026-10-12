@@ -1,7 +1,6 @@
 import re 
 
 text = "123 files have been changed 5 major edits"
-result = re.compile("r\d+") 
 # shows 
 
 # for match in result.finditer(text):
@@ -21,4 +20,18 @@ print(match.group())
 #     r"\+(?P<new_line>\d+) @@"
 # )
 # match = pattern.search("@@ -10 +12 @@")
-# print(match.groupdict())
+patch = """ context
++first added line
+ context
++second added line"""
+
+try:
+    pattern = re.compile(
+    r"^+.*$",
+    re.MULTILINE,
+    )
+
+    print(pattern.findall(patch))
+
+except Exception as e:
+    print(e)
