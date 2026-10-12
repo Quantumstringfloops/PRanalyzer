@@ -43,4 +43,16 @@ def find_all_todos(patch):
         r"^.*\b(?:TODO|FIXME)\b.*$",
         re.MULTILINE | re.IGNORECASE,
     )
-    result = TODO_PATTERN.findall(patch)
+    result = TODO_PATTERN.finditer(patch)
+    return result.group()
+
+    return result.group
+
+def find_cl(data):
+    CONSOLE_LOG = re.compile(
+        r"^\+\s*console\.log\s*\(",
+        re.MULTILINE,
+    )
+
+    result = CONSOLE_LOG.finditer(data)
+    return result.group()

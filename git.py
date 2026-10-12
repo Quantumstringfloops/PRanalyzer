@@ -78,8 +78,7 @@ def connect_to_github(repository_name:str):
             # for line in removed:
             #     print("-", line)
 
-            print("All the todos")
-            print(find_all_todos(changed_file.patch))
+            
 
             break # prints only the first changed file
 
