@@ -43,10 +43,8 @@ def find_all_todos(patch):
         r"^.*\b(?:TODO|FIXME)\b.*$",
         re.MULTILINE | re.IGNORECASE,
     )
-    result = TODO_PATTERN.finditer(patch)
-    return result.group()
-
-    return result.group
+    for result in TODO_PATTERN.finditer(patch):
+        return result.group()
 
 def find_cl(data):
     CONSOLE_LOG = re.compile(
@@ -58,8 +56,8 @@ def find_cl(data):
         return result.group()
 
 
-find_cl("console.log(chicken)")
-find_all_todos("""normal code
+print(find_cl("console.log(chicken)"))
+print(find_all_todos("""normal code
 # TODO: validate the response
 value = 10  # FIXME this later
-methodology = test""")
+methodology = test"""))
