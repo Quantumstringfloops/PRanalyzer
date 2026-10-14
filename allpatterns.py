@@ -41,7 +41,6 @@ patterns = {
     ),
 }
 
-
 for rule_name, pattern in patterns.items():
     matches = list(pattern.finditer(test_patch))
 
