@@ -91,4 +91,4 @@ def connect_to_github(repository_name:str):
 
 
 connect_to_github('microsoft/vscode')
-parse_url('https://github.com/microsoft/vscode')
+print(parse_url('https://github.com/microsoft/vscode'))
