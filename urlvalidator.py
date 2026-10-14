@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 def parse_url(repo_url):
     # 1. Handle SSH shorthand format (git@github.com:owner/repo.git)
     ssh_pattern = r"^git@github\.com:(?P<owner>[a-zA-Z0-9_.-]+)/(?P<repo>[a-zA-Z0-9_.-]+?)(?:\.git)?$"
-    match = re.match(ssh_pattern, url)
+    match = re.match(ssh_pattern, repo_url)
     if match:
         data = match.groupdict()
         return {
@@ -18,7 +18,7 @@ def parse_url(repo_url):
         }
 
     try:
-        parsed = urlparse(url)
+        parsed = urlparse(repo_url)
         if parsed.netloc in ["github.com", "www.github.com"]:
             path_parts = parsed.path.strip("/").split("/")
             if len(path_parts) >= 2:
