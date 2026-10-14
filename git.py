@@ -3,6 +3,7 @@ import os
 from github import Github
 from github.GithubException import GithubException
 from regex import find_all_todos, find_cl
+from urlvalidator import parse_url
 
 def analyze_patch(patch):
     added_lines = []
@@ -90,3 +91,4 @@ def connect_to_github(repository_name:str):
 
 
 connect_to_github('microsoft/vscode')
+parse_url('https://github.com.microsoft/vscode')
