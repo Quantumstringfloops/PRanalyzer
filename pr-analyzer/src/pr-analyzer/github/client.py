@@ -1,6 +1,7 @@
 from urllib.parse import urlsplit, urlparse
 from github import Github, Auth
-from github import GithubException
+from github import GithubException, RateLimitExceededException
+from datetime import datetime
 from exceptions import (
     InvalidTokenError,
     PrivateRepoError,
@@ -26,6 +27,22 @@ class GithubClient:
         try: 
             repo = self.git_instance.get_repo(repo_name)
             pull_request = repo.get_pull(pr_number)
+
+            return PRSummary(
+                number=pr.number,
+                title=pr.title,
+                author=pr.user.login,
+                repo=repo_name,
+                base_branch=pr.base.ref,
+                head_branch=pr.head.ref,
+                total_additions=pr.additions,
+                total_deletions=pr.deletions,
+                is_draft=pr.draft
+            )
+        except RateLimitExceededException as e:
+            reset_time = datetime.fromtimestamp(self._gh.rate_limiting_resettime)
+            raise RateLimitError(reset_time) from e
+        
         except GithubException as e:
             if e.status == 401:
                 raise InvalidTokenError("Token is missing or invalid") from e
@@ -54,7 +71,7 @@ class GithubClient:
         if len(path_parts) != 4 or path_parts[2] != "pull":
                 raise ValueError("Invalid Pull request URL")
         if not path_parts[3].isdigit():
-            raise ValueError(f"PR number must be an integer, got: {parts[3]!r}")
+            raise ValueError(f"PR number must be an integer, got: {path_parts[3]!r}")
         repo_name = path_parts[0]+"/"+path_parts[1]
         pr_number = path_parts[3]
             
@@ -62,4 +79,6 @@ class GithubClient:
             repo_name,
             pr_number
             )
+    def build_file_changes(self, pr) -> list[fileChange]:
+
     
