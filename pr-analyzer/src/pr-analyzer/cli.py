@@ -1,7 +1,3 @@
-import argparse
-import github
-from github import GithubException
-
 from urllib.parse import urlsplit, urlparse
 
 def parse_url_and_validate(pr_url):
@@ -10,15 +6,22 @@ def parse_url_and_validate(pr_url):
     
     o = urlsplit(pr_url)
     try:
-        if o.netloc in ["www.github.com", "github.com"]:
-            o = urlsplit(pr_url) 
+        if o.netloc in ["www.github.com", "github.com"] & o.scheme == "https":
             path_parts = o.path.strip("/").split("/")
             # checks if repo url is valid
             if len(path_parts) != 4:
                 return "Invalid PR url"
-            pr_number = path_parts[3]
             repo_name = path_parts[2]
-            print(path_parts)
+            pr_number = path_parts[3]
+            if type(pr_number) is not int:
+                return {"valid": False, "Error": "Invalid PR number in the url"}
+
+            return {
+                "valid":True,
+                "repo_name": repo_name,
+                "pr_number": pr_number
+            }
+            
 
     except Exception :
         pass
@@ -26,5 +29,5 @@ def parse_url_and_validate(pr_url):
     return {"valid": False, "error": "Invalid GitHub repository URL"}
 
 
-parse_url_and_validate("https://github.com/octocat/Hello-World/pull/42")
-    
+result = parse_url_and_validate("https://github.com/octocat/Hello-World/pull/42")
+print(result) 
