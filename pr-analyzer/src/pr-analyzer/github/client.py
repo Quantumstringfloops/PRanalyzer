@@ -10,6 +10,7 @@ from exceptions import (
     RepositoryNotFoundError,
     PRAnalyzerError
 )
+from models import PRSummary, FileChange
 from dotenv import load_dotenv
 import os
 load_dotenv()
@@ -79,6 +80,15 @@ class GithubClient:
             repo_name,
             pr_number
             )
-    def build_file_changes(self, pr) -> list[fileChange]:
-
+    def build_file_changes(self, pr) -> list[FileChange]:
+        files = []
+        for f in pr.get_files():
+            files.append(FileChange(
+                filename: f.filename,
+                status: f.status,
+                additions: f.additions,
+                deletions: f.deletions,
+                patch : f.patch
+                raw_content: None
+            ))
     
