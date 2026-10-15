@@ -61,6 +61,7 @@ def connect_to_github(repository_name:str):
             print(f" Pull request details: author: {author}, title: {title},number: {number}, files_changed: {files_changed}")
 
         pullr = repo.get_pull(341147)
+        print("FOCUS OVER HERE",pullr)
         for changed_file in pullr.get_files():
             print("File:", changed_file.filename)
             print("Status:", changed_file.status)

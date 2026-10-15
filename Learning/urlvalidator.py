@@ -10,7 +10,7 @@ def parse_url(repo_url):
 
     pattern = r"^https?://(?:www\.)?github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<pr_number>\d+)/?"
     
-    match = re.match(pattern, url)
+    match = re.match(pattern, repo_url)
     if match:
         data = match.groupdict()
         return {
