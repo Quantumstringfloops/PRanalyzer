@@ -7,7 +7,6 @@ from exceptions import (
     PrivateRepoError,
     PRNotFoundError,
     RateLimitError,
-    RepositoryNotFoundError,
     PRAnalyzerError
 )
 from models import PRSummary, FileChange
@@ -27,7 +26,7 @@ class GithubClient:
 
         try: 
             repo = self.git_instance.get_repo(repo_name)
-            pull_request = repo.get_pull(pr_number)
+            pr = repo.get_pull(pr_number)
 
             return PRSummary(
                 number=pr.number,
@@ -83,12 +82,22 @@ class GithubClient:
     def build_file_changes(self, pr) -> list[FileChange]:
         files = []
         for f in pr.get_files():
-            files.append(FileChange(
-                filename: f.filename,
-                status: f.status,
-                additions: f.additions,
-                deletions: f.deletions,
-                patch : f.patch
-                raw_content: None
+            if f.patch is None: 
+                files.append(FileChange(
+                filename= f.filename,
+                status= f.status,
+                additions= f.additions,
+                deletions= f.deletions,
+                patch = None,
+                raw_content= None
             ))
+            else:
+                files.append(FileChange(
+                    filename= f.filename,
+                    status= f.status,
+                    additions= f.additions,
+                    deletions= f.deletions,
+                    patch = f.patch,
+                    raw_content= None
+                ))
     
