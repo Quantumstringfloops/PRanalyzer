@@ -11,9 +11,10 @@ from exceptions import (
 )
 from config import settings
 from models import PRSummary, FileChange
-from dotenv import load_dotenv
-import os
-load_dotenv()
+import structlog
+
+log = structlog.get_config(__name__)
+
 class GithubClient:
 
     def __init__(self):
@@ -85,7 +86,8 @@ class GithubClient:
         max_diif_lines = settings.max_diff_lines
         for f in pr.get_files():
             raw_content = None
-            if f.patch is None: 
+            if f.patch is None:
+                log.warning("Skipped binary file", filename=f.filename)
                 continue
             lines = f.patch.splitlines()
             if len(lines) > max_diif_lines:
