@@ -19,7 +19,7 @@ Try:
 """
 
 import typer
-
+from rich import print
 app = typer.Typer(help="A playground app to learn typer, not a real tool.")
 
 
