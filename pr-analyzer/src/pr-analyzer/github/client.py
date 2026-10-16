@@ -1,6 +1,6 @@
 from urllib.parse import urlsplit, urlparse
 from github import Github, Auth
-from github import GithubException, RateLimitExceededException
+from github import GithubException, RateLimitExceededException, UnknownObjectException
 from datetime import datetime
 from exceptions import (
     InvalidTokenError,
@@ -9,6 +9,7 @@ from exceptions import (
     RateLimitError,
     PRAnalyzerError
 )
+from config import settings
 from models import PRSummary, FileChange
 from dotenv import load_dotenv
 import os
@@ -16,7 +17,7 @@ load_dotenv()
 class GithubClient:
 
     def __init__(self):
-        token = os.getenv("GITHUB_ACCESS_TOKEN")
+        token = settings.github_token
         auth = Auth.Token(token)
         self.git_instance = Github(auth=auth)
 
@@ -40,7 +41,7 @@ class GithubClient:
                 is_draft=pr.draft
             )
         except RateLimitExceededException as e:
-            reset_time = datetime.fromtimestamp(self._gh.rate_limiting_resettime)
+            reset_time = datetime.fromtimestamp(self.git_instance.rate_limiting_resettime)
             raise RateLimitError(reset_time) from e
         
         except GithubException as e:
@@ -58,7 +59,7 @@ class GithubClient:
 
 
     def parse_url_and_validate(self, pr_url: str) -> tuple[str, int]:
-        if pr_url == None or "":
+        if not pr_url:
             raise ValueError("The URL string cannot be empty")
         
         o = urlsplit(pr_url)
@@ -73,31 +74,35 @@ class GithubClient:
         if not path_parts[3].isdigit():
             raise ValueError(f"PR number must be an integer, got: {path_parts[3]!r}")
         repo_name = path_parts[0]+"/"+path_parts[1]
-        pr_number = path_parts[3]
+        pr_number = int(path_parts[3])
             
         return (
             repo_name,
             pr_number
             )
-    def build_file_changes(self, pr) -> list[FileChange]:
+    def build_file_changes(self, pr, repo) -> list[FileChange]:
         files = []
+        max_diif_lines = settings.max_diff_lines
         for f in pr.get_files():
+            raw_content = None
             if f.patch is None: 
-                files.append(FileChange(
+                continue
+            lines = f.patch.splitlines()
+            if len(lines) > max_diif_lines:
+                lines = lines[:max_diif_lines]
+                lines.append[("....truncated")]
+            patch = "/n".join(lines)
+            if f.status != "removed":
+                try:
+                    content_file = repo.get_contents(f.filename, ref =pr.head.sha)
+                    raw_content = content_file.decoded_content.decode("utf-8", errors="replace")
+                except UnknownObjectException:
+                    raw_content = None
+            files.append(FileChange(
                 filename= f.filename,
                 status= f.status,
                 additions= f.additions,
                 deletions= f.deletions,
-                patch = None,
-                raw_content= None
-            ))
-            else:
-                files.append(FileChange(
-                    filename= f.filename,
-                    status= f.status,
-                    additions= f.additions,
-                    deletions= f.deletions,
-                    patch = f.patch,
-                    raw_content= None
-                ))
-    
+                patch = f.patch,
+                raw_content= raw_content
+            )) 
