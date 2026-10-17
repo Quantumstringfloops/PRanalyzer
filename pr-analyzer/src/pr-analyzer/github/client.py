@@ -25,7 +25,7 @@ class GithubClient:
 
     def fetch_pr(self,url: str) -> PRSummary:
         repo_name, pr_number = self.parse_url_and_validate(url)
-
+        log.info("fetch_started", url=url)
         try: 
             repo = self.git_instance.get_repo(repo_name)
             pr = repo.get_pull(pr_number)
