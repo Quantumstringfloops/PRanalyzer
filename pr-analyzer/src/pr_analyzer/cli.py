@@ -1,8 +1,8 @@
 import typer
 from typing import Annotated
-from logging_config import setup_logging
-from pipeline import AnalysisPipeline
-from exceptions import (
+from pr_analyzer.logging_config import setup_logging
+from pr_analyzer.pipeline import AnalysisPipeline
+from pr_analyzer.exceptions import (
     InvalidTokenError,
     PrivateRepoError,
     PRNotFoundError,
