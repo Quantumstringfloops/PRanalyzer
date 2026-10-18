@@ -5,27 +5,27 @@ from github.GithubException import GithubException
 from regex import find_all_todos, find_cl
 from urlvalidator import parse_url
 
-def analyze_patch(patch):
-    added_lines = []
-    removed_lines = []
+# def analyze_patch(patch):
+#     added_lines = []
+#     removed_lines = []
 
-    if not patch : 
-        return added_lines, removed_lines
+#     if not patch : 
+#         return added_lines, removed_lines
 
-    for line in patch.splitlines():
-        if line.startswith("+++"):
-            continue
-        if line.startswith("---"):
-            continue
-
-
-        if line.startswith("+"):
-            added_lines.append(line[1:])
-        elif line.startswith("-"): 
-            removed_lines.append(line[1:])
+#     for line in patch.splitlines():
+#         if line.startswith("+++"):
+#             continue
+#         if line.startswith("---"):
+#             continue
 
 
-    return added_lines,removed_lines
+#         if line.startswith("+"):
+#             added_lines.append(line[1:])
+#         elif line.startswith("-"): 
+#             removed_lines.append(line[1:])
+
+
+#     return added_lines,removed_lines
 
 def connect_to_github(repository_name:str):
     # Only for private repos
@@ -37,7 +37,7 @@ def connect_to_github(repository_name:str):
 
     try: 
         repo = github.get_repo(repository_name)
-
+        print("repo: ", repo)
         print("Connection succesful \n")
         print(f"repo name :", repo.name)
         print(f"repo desc: ", repo.description)
@@ -92,4 +92,4 @@ def connect_to_github(repository_name:str):
 
 
 connect_to_github('microsoft/vscode')
-print(parse_url('https://github.com/microsoft/vscode'))
+
