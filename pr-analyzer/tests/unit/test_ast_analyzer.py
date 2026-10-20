@@ -1,5 +1,5 @@
-from pr_analyzer.analyzers.ast_analyzer import StaticAnalyzer
-from pr_analyzer.models import FileChange
+from src.pr_analyzer.analyzer.ast_analyzer import StaticAnalyzer
+from src.pr_analyzer.models import FileChange
 
 def make_file(patch: str, filename: str = "test.py") -> FileChange:
     return FileChange(

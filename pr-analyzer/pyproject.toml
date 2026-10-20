@@ -19,7 +19,7 @@ structlog = "^24.2"
 pr-analyzer = "pr_analyzer.cli:app"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.2"
+pytest = "*"
 pytest-cov = "^5.0"
 ruff = "^0.4"
 mypy = "^1.10"
