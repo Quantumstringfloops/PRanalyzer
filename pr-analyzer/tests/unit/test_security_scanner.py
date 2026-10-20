@@ -1,5 +1,5 @@
 import pytest
-from pr_analyzer.analyzers.security_scanner import SecurityScanner
+from pr_analyzer.security.scanner import SecurityScanner
 from pr_analyzer.models import FileChange
 
 def make_file(patch: str, status: str = "modified", filename: str = "test.py") -> FileChange:

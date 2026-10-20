@@ -3,12 +3,16 @@ import subprocess
 import tempfile
 import os
 from pr_analyzer.models import FileChange, Suggestion
+import structlog
+log = structlog.get_logger(__name__)
+
+
 
 class SemgrepRunner:
 
     def scan(self, files: list[FileChange]) -> list[Suggestion]:
         # loops files
-        final_suggestions = []
+        suggestions = []
         for file in files:
             if file.status == "removed":
                 continue
@@ -20,11 +24,11 @@ class SemgrepRunner:
             temp_path = tmp_file.name
         try:
             sarif= self.run_semgrep(temp_path)
-            if sarif:
-
-                final_suggestions.extend(self.parse_sarif(sarif, "fake_file.py"))
+            suggestions.extend(self.parse_sarif(sarif, "fake_file.py"))
         finally:
             os.unlink(temp_path)
+        log.info("semgrep scan complete", total_suggestions=len(suggestions))
+        return suggestions
 
     def get_suffix(self, filename : str):
         ext = os.path.splitext(filename)[1]

@@ -1,8 +1,9 @@
 import re 
 from pr_analyzer.models import Suggestion, FileChange
 import structlog
-from semgrep_runner import SemgrepRunner
-from dep_auditor import DepAuditScanner
+from pr_analyzer.security.semgrep_runner import SemgrepRunner
+from pr_analyzer.security.dep_auditor import DepAuditScanner
+
 log = structlog.get_logger(__name__)
 
 
@@ -171,8 +172,8 @@ class SecurityScanner:
                 continue
             suggestions.extend(self.scan_secrets(file))
             suggestions.extend(self.scan_dangerous(file))
-            suggestions.extend(SemgrepRunner.scan(files))
-            suggestions.extend(DepAuditScanner.scan(files))
+            suggestions.extend(SemgrepRunner().scan(files))
+            suggestions.extend(DepAuditScanner().scan(files))
 
         seen = set()
         unique = []
