@@ -209,5 +209,15 @@ class StaticAnalyzer:
                 source="static"
             ))
 
-
+        lines = len(file.raw_content.splitlines())
+        if lines > 500:
+            suggestions.append(Suggestion(
+            filename=file.filename,
+            severity="LOW",
+            category="complexity",
+            title="File too long",
+            description=f"This file has {line_count} lines. Consider splitting it into smaller modules.",
+            line=None,
+            source="static"
+        ))
     
