@@ -16,7 +16,7 @@ def walk(node) -> None:
 
     if node.type == "function_definition": 
         name_node = node.child_by_field_name("name")
-
+        print(name_node)
         if name_node is not None: 
             function_name = source[name_node.start_byte: name_node.end_byte].decode("utf-8")
 

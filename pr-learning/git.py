@@ -64,7 +64,8 @@ def connect_to_github(repository_name:str):
         print("FOCUS OVER HERE",pullr)
         for changed_file in pullr.get_files():
             print("File:", changed_file.filename)
-            print("File list: ", path_parts = changed_file.filename.strip('/').split('/'))
+            filepath = changed_file.filename.strip("/").split("/")
+            print("File list: ",filepath[-1])
             print("Status:", changed_file.status)
             print("Additions:", changed_file.additions)
             print("Deletions:", changed_file.deletions)
