@@ -172,7 +172,14 @@ class StaticAnalyzer:
 
     def analyze(self, files: list[FileChange]) -> list[Suggestion]:
         suggestions = []
-        
+        for file in files:
+            if file.patch is None:
+                continue
+            if file.status == "removed":
+                continue
+            suggestions.extend(self.scan_patterns(file))
+            suggestions.extend(self.scan_tree_sitter(file))
+
 
 
     def scan_patterns(self, file:FileChange) -> list[Suggestion]:
