@@ -4,7 +4,10 @@ import tree_sitter_python as tspython
 import tree_sitter_typescript as tstypescript
 import tree_sitter_javascript as tsjavascript
 from pr_analyzer.models import FileChange, Suggestion
+from logging_config import setup_logging
 
+import structlog
+log = structlog.get_logger(__name__)
 
 
 
@@ -180,6 +183,7 @@ class StaticAnalyzer:
             suggestions.extend(self.scan_patterns(file))
             suggestions.extend(self.scan_tree_sitter(file))
 
+        log.info("static analysis complete", total_suggestions=len(suggestions))
 
 
     def scan_patterns(self, file:FileChange) -> list[Suggestion]:
