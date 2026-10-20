@@ -168,7 +168,46 @@ def count_complexity(node) -> int:
 
     return count
 
+class StaticAnalyzer:
 
+    def analyze(self, files: list[FileChange]) -> list[Suggestion]:
+    def scan_patterns(self, file:FileChange) -> list[Suggestion]:
+
+    def scan_tree_sitter(self, file:FileChange)->list[Suggestion]:
+        suggestions = []
+        if file.raw_content is None:
+            return []
+        lang = get_language(file.filename)
+        if lang is None:
+            return []
+        LANGUAGE = Language(lang)
+        parser = Parser(LANGUAGE)
+
+        source = bytes(file.raw_content, "utf-8")
+        tree = parser.parse(source)
+
+        complexity = count_complexity(tree.root_node)
+        if complexity > 20:
+            suggestions.append(Suggestion(
+                filename = file.filename,
+                severity="MEDUIM",
+                category="complexity",
+                title = "High cyclomatic complexity",
+                description=f"This file has a complexity score of {complexity}. Consider breaking it into smaller functions.",
+                line = None,
+                source="static"
+            ))
+
+        elif complexity > 30:
+            suggestions.append(Suggestion(
+                filename = file.filename,
+                severity="HIGH",
+                category="complexity",
+                title = "Very high cyclomatic complexity",
+                description=f"This file has a complexity score of {complexity}. Consider breaking it into smaller functions.",
+                line = None,
+                source="static"
+            ))
 
 
     
