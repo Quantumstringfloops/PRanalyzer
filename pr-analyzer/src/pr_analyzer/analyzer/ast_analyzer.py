@@ -1,10 +1,12 @@
 import re
 from tree_sitter import Language, Parser
 import tree_sitter_python as tspython
+import tree_sitter_typescript as tstypescript
+import tree_sitter_javascript as tsjavascript
 from pr_analyzer.models import FileChange, Suggestion
 
-PYTHON_LANGUAGE = Language(tspython.language())
-parser = Parser(PYTHON_LANGUAGE)
+
+
 
 # for the treesitter
 
@@ -114,4 +116,46 @@ PATTERNS = [
 
 def extract_line_numbers(patch: str, match_position:int) -> int|None:
     hunk_pattern = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-class StaticAnalyzer: 
+    current_line = None
+    current_hunk_start_pos = None
+
+    for hunk_match in hunk_pattern.finditer(patch):
+        if hunk_match.start() <= match_position:
+            current_line = int(hunk_match.group(1))
+            current_hunk_start_pos = hunk_match.end()
+        else:
+            break
+
+    if current_line is None:
+        return None
+
+    chunk = patch[current_hunk_start_pos:match_position]
+
+    for line in chunk.splitlines():
+        if line.startswith("-"):
+            continue          # removed line — doesn't exist in new file
+        current_line += 1     # added (+) and context lines both count
+
+    return current_line
+
+def get_language(filename:str):
+    path_parts = filename.strip('/').split('/')
+    file = path_parts[-1].file.split(".").strip(".")
+    file_type = file[-1]
+    language = LANGUAGE_MAP.get(file_type)
+
+    if language is None:
+        return []
+    if language == "python":
+        return Language(tspython.language)
+    if language == "javascript":
+        return Language(tsjavascript.language)
+    if language == "tsx":
+        return Language(tstypescript.language_tsx())
+    if language == "typescript":
+        return Language(tstypescript.language_typescript())
+
+    
+
+
+    
