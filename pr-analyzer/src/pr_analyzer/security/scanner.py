@@ -1,5 +1,8 @@
 import re 
-from pr_analyzer.models import Suggestion
+from pr_analyzer.models import Suggestion, FileChange
+import structlog
+log = structlog.get_logger(__name__)
+
 
 SECRET_PATTERNS = [
     {
@@ -118,3 +121,94 @@ DANGEROUS_PATTERNS = [
         "description": "debug=True should never be committed. It exposes stack traces and sensitive data in production.",
     },
 ]
+
+def get_added_lines(patch:str) -> str:
+    added_lines = ""
+    if not patch : 
+        return ""
+    for line in patch.splitlines():
+        if line.startswith('+++'):
+            continue
+        if line.startswith("+"):
+            added_lines += line[1:] + "\n"
+
+    return added_lines
+
+
+def extract_line_numbers(patch: str, match_position:int) -> int|None:
+    hunk_pattern = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+    current_line = None
+    current_hunk_start_pos = None
+
+    for hunk_match in hunk_pattern.finditer(patch):
+        if hunk_match.start() <= match_position:
+            current_line = int(hunk_match.group(1))
+            current_hunk_start_pos = hunk_match.end()
+        else:
+            break
+
+    if current_line is None:
+        return None
+
+    chunk = patch[current_hunk_start_pos:match_position]
+
+    for line in chunk.splitlines():
+        if line.startswith("-"):
+            continue          # removed line — doesn't exist in new file
+        current_line += 1     # added (+) and context lines both count
+
+    return current_line
+
+class SecurityScanner:
+    def scan(self, files: list[FileChange]) -> list[Suggestion]:
+        suggestions = []
+        for file in files:
+            if file.status == "removed":
+                return []
+            if file.raw_content is None:
+                return []
+            suggestions.extend(self.scan_secrets(file))
+            suggestions.extend(self.scan_dangerous(file))
+
+        log.info("security analysis complete", total_suggestions= len(suggestions))
+        return suggestions
+
+            
+    def scan_secrets(self, file: FileChange) -> list[Suggestion]:
+        suggestions = []
+        if file.patch is None:
+            return []
+        added_lines = get_added_lines(file.patch)
+
+        for pattern in SECRET_PATTERNS:
+            for match in pattern["regex"].finditer(added_lines):
+                line = extract_line_numbers(added_lines, match.start())
+                suggestions.append(Suggestion(
+                    filename= file.filename,
+                    severity=pattern["severity"],
+                    category=pattern["category"],
+                    title=pattern["title"],
+                    description=pattern["description"],
+                    line=line,
+                    source="static"
+                )) 
+    def scan_dangerous(self, file: FileChange) -> list[Suggestion]:
+        suggestions = []
+        if file.patch is None:
+            return []
+        added_lines = get_added_lines(file.patch)
+
+        for pattern in DANGEROUS_PATTERNS:
+            for match in pattern["regex"].finditer(added_lines):
+                line = extract_line_numbers(added_lines, match.start())
+                suggestions.append(Suggestion(
+                    filename= file.filename,
+                    severity=pattern["severity"],
+                    category=pattern["category"],
+                    title=pattern["title"],
+                    description=pattern["description"],
+                    line=line,
+                    source="static"
+                ))
+
+        
