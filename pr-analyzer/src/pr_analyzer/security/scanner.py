@@ -1,6 +1,8 @@
 import re 
 from pr_analyzer.models import Suggestion, FileChange
 import structlog
+from semgrep_runner import SemgrepRunner
+from dep_auditor import DepAuditScanner
 log = structlog.get_logger(__name__)
 
 
@@ -169,9 +171,33 @@ class SecurityScanner:
                 continue
             suggestions.extend(self.scan_secrets(file))
             suggestions.extend(self.scan_dangerous(file))
+            suggestions.extend(SemgrepRunner.scan(files))
+            suggestions.extend(DepAuditScanner.scan(files))
 
-        log.info("security analysis complete", total_suggestions= len(suggestions))
-        return suggestions
+        seen = set()
+        unique = []
+        for s in suggestions:
+            key = (s.filename, s.title, s.line)
+            if key not in seen:
+                seen.add(key)
+                unique.append(s)
+
+        # summary log
+        critical= sum(1 for s in unique if s.severity == "CRITICAL")
+        high= sum(1 for s in unique if s.severity == "HIGH")
+        medium = sum(1 for s in unique if s.severity == "MEDIUM")
+        low = sum(1 for s in unique if s.severity == "LOW")
+
+        log.info(
+            "security scan complete",
+            total=len(unique),
+            critical=critical,
+            high=high,
+            medium=medium,
+            low=low,
+        )
+
+        return unique
 
             
     def scan_secrets(self, file: FileChange) -> list[Suggestion]:
