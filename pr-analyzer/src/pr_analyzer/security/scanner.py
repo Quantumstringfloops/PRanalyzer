@@ -164,9 +164,9 @@ class SecurityScanner:
         suggestions = []
         for file in files:
             if file.status == "removed":
-                return []
+                continue
             if file.raw_content is None:
-                return []
+                continue
             suggestions.extend(self.scan_secrets(file))
             suggestions.extend(self.scan_dangerous(file))
 
@@ -182,7 +182,7 @@ class SecurityScanner:
 
         for pattern in SECRET_PATTERNS:
             for match in pattern["regex"].finditer(added_lines):
-                line = extract_line_numbers(added_lines, match.start())
+                line = extract_line_numbers(file.patch, match.start())
                 suggestions.append(Suggestion(
                     filename= file.filename,
                     severity=pattern["severity"],
@@ -190,8 +190,12 @@ class SecurityScanner:
                     title=pattern["title"],
                     description=pattern["description"],
                     line=line,
-                    source="static"
+                    source="security"
                 )) 
+
+        return suggestions
+
+    
     def scan_dangerous(self, file: FileChange) -> list[Suggestion]:
         suggestions = []
         if file.patch is None:
@@ -200,7 +204,7 @@ class SecurityScanner:
 
         for pattern in DANGEROUS_PATTERNS:
             for match in pattern["regex"].finditer(added_lines):
-                line = extract_line_numbers(added_lines, match.start())
+                line = extract_line_numbers(file.patch, match.start())
                 suggestions.append(Suggestion(
                     filename= file.filename,
                     severity=pattern["severity"],
@@ -208,7 +212,8 @@ class SecurityScanner:
                     title=pattern["title"],
                     description=pattern["description"],
                     line=line,
-                    source="static"
+                    source="security"
                 ))
 
+        return suggestions
         
