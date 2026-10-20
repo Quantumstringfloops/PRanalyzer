@@ -171,7 +171,26 @@ def count_complexity(node) -> int:
 class StaticAnalyzer:
 
     def analyze(self, files: list[FileChange]) -> list[Suggestion]:
+        suggestions = []
+        
+
+
     def scan_patterns(self, file:FileChange) -> list[Suggestion]:
+        suggestions = []
+        for pattern in PATTERNS:
+            for match in pattern["regex"].finditer(file.patch):
+                line = extract_line_numbers(file.patch, match.start())
+                suggestions.append(Suggestion(
+                filename=file.filename,
+                severity=pattern["severity"],
+                category=pattern["category"],
+                title=pattern["title"],
+                description=pattern["description"],
+                line=line,
+                source="static"
+            ))
+        return suggestions
+
 
     def scan_tree_sitter(self, file:FileChange)->list[Suggestion]:
         suggestions = []
@@ -216,8 +235,10 @@ class StaticAnalyzer:
             severity="LOW",
             category="complexity",
             title="File too long",
-            description=f"This file has {line_count} lines. Consider splitting it into smaller modules.",
+            description=f"This file has {lines} lines. Consider splitting it into smaller modules.",
             line=None,
             source="static"
         ))
+
+        return suggestions
     
