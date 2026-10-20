@@ -38,7 +38,6 @@ def connect_to_github(repository_name:str):
     try: 
         repo = github.get_repo(repository_name)
         print("repo: ", repo)
-        print("CHECK ME OUT: ", repo.get_contents())
         print("Connection succesful \n")
         print(f"repo name :", repo.name)
         print(f"repo desc: ", repo.description)
@@ -64,8 +63,8 @@ def connect_to_github(repository_name:str):
         pullr = repo.get_pull(341147)
         print("FOCUS OVER HERE",pullr)
         for changed_file in pullr.get_files():
-            print("CHECK ME OUT: ", repo.get_contents())
             print("File:", changed_file.filename)
+            print("File list: ", path_parts = changed_file.filename.strip('/').split('/'))
             print("Status:", changed_file.status)
             print("Additions:", changed_file.additions)
             print("Deletions:", changed_file.deletions)
