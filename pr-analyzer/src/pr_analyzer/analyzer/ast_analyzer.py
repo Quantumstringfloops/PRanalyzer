@@ -145,11 +145,11 @@ def get_language(filename:str):
     language = LANGUAGE_MAP.get(file_type)
 
     if language is None:
-        return []
+        return None
     if language == "python":
-        return Language(tspython.language)
+        return Language(tspython.language())
     if language == "javascript":
-        return Language(tsjavascript.language)
+        return Language(tsjavascript.language())
     if language == "tsx":
         return Language(tstypescript.language_tsx())
     if language == "typescript":
@@ -159,7 +159,7 @@ def get_language(filename:str):
 def count_complexity(node) -> int:
     # count decision nodes if elif else where except case for
     count = 0
-    NAMED_NODES =["if_statements", "for_statement", "where_statement", "with_statement", "except_statement", "cause_clause"]
+    NAMED_NODES =["if_statement", "for_statement", "while_statement", "with_statement", "except_clause", "cause_clause"]
 
     if node.type in NAMED_NODES:
         count += 1
