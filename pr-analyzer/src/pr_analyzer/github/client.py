@@ -111,7 +111,7 @@ class GithubClient:
                     content_file = repo.get_contents(f.filename, ref =pr.head.sha)
                     raw_content = content_file.decoded_content.decode("utf-8", errors="replace")
                 except UnknownObjectException:
-                    log.warning("No ")
+                    log.warning("Unkown object error")
                     raw_content = None
             files.append(FileChange(
                 filename= f.filename,
