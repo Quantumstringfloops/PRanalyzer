@@ -155,7 +155,20 @@ def get_language(filename:str):
     if language == "typescript":
         return Language(tstypescript.language_typescript())
 
-    
+
+def count_complexity(node) -> int:
+    # count decision nodes if elif else where except case for
+    count = 0
+    NAMED_NODES =["if_statements", "for_statement", "where_statement", "with_statement", "except_statement", "cause_clause"]
+
+    if node.type in NAMED_NODES:
+        count += 1
+    for child in node.children:
+        count += count_complexity(child)
+
+    return count
+
+
 
 
     
