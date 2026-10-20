@@ -111,3 +111,7 @@ PATTERNS = [
                         "rough signal, not a guarantee.",
     },
 ]
+
+def extract_line_numbers(patch: str, match_position:int) -> int|None:
+    hunk_pattern = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+class StaticAnalyzer: 
