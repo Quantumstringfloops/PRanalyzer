@@ -16,7 +16,7 @@ analyzer = StaticAnalyzer()
 def test_todo_match():
     file = make_file("@@ -1,1 +1,1 @@\n+# TODO: fix this later")
     results = analyzer.analyze([file])
-    assert any(s.title == "TODO comment" for s in results)
+    assert any(s.title == "TODO/FIXME comment added" for s in results)
 
 def test_todo_no_match():
     file = make_file("@@ -1,1 +1,1 @@\n+x = 1")

@@ -35,11 +35,11 @@ class Suggestion:
     line: int | None = None       # line number in the file if known
     source: str = "static"        # "static" | "security" | "llm"
 
-@dataclass
-class AnalysisResult:
-    pr: PRSummary                  # title, author, repo, branch info
-    suggestions: list[Suggestion]  # everything found across all analyzers
-    score: QualityScore            # overall grade, dimension breakdown
-    passed: bool                   # False if blocking issues found
-    analysis_duration_seconds: float
-    llm_provider_used: str | None
+# @dataclass
+# class AnalysisResult:
+#     pr: PRSummary                  # title, author, repo, branch info
+#     suggestions: list[Suggestion]  # everything found across all analyzers
+#     score: QualityScore            # overall grade, dimension breakdown
+#     passed: bool                   # False if blocking issues found
+#     analysis_duration_seconds: float
+#     llm_provider_used: str | None
