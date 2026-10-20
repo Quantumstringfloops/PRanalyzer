@@ -23,6 +23,8 @@ pytest = "*"
 pytest-cov = "^5.0"
 ruff = "^0.4"
 mypy = "^1.10"
+semgrep = "^1.181.0"
+pip-audit = "^2.10.1"
 
 [tool.ruff]
 line-length = 100
