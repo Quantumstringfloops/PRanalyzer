@@ -2,15 +2,15 @@ from urllib.parse import urlsplit, urlparse
 from github import Github, Auth
 from github import GithubException, RateLimitExceededException, UnknownObjectException
 from datetime import datetime
-from exceptions import (
+from pr_analyzer.exceptions import (
     InvalidTokenError,
     PrivateRepoError,
     PRNotFoundError,
     RateLimitError,
     PRAnalyzerError
 )
-from config import settings
-from models import PRSummary, FileChange
+from pr_analyzer.config import settings
+from pr_analyzer.models import PRSummary, FileChange
 import structlog
 
 log = structlog.get_logger(__name__)
