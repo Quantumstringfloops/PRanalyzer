@@ -28,11 +28,7 @@ class LLMEngine:
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
-        for file in PRSummary.files:
-            lines = file.patch.splitlines()
-            if len(lines)> settings.max_diff_lines:
-                lines = lines[:settings.max_diff_lines]
-                log.info("patch truncated", f = file.filename, original_line_count=len(lines))
+        
             
 
 

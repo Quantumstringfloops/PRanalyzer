@@ -1,3 +1,5 @@
+from pr_analyzer.models import PRSummary,Suggestion
+
 SYSTEM_PROMPT = """
 You are a pull-request code reviewer.
 
