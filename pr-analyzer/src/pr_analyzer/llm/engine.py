@@ -105,12 +105,14 @@ class LLMEngine:
     def to_suggestions(self, items: list[dict])-> list[Suggestion]:
         suggestions = []
         for item in items:
+            file_list = item["filename"].strip("/").split("/")
+            file_name = file_list[-1]
             suggestions.append(Suggestion(
-                filename=,
+                filename=file_name,
                 severity=item["severity"],
                 category=item["category"],
                 title=item["title"],
-                description=item["description"]
+                description=item["description"],
                 line=item["line"],
                 source = "llm"
             ))
