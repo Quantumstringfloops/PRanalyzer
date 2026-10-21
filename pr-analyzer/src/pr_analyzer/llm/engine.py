@@ -103,7 +103,7 @@ class LLMEngine:
         return []
 
 
-    def validate_suggestion(self, item: list)-> bool:
+    def validate_suggestion(self, item: dict)-> bool:
         list_check = list(item)
         for item in list_check:
             if item.lower() in ["filename", "severity", "category", "title", "description", "confidence"]:
@@ -113,7 +113,17 @@ class LLMEngine:
                 log.warn("Missing field(s)")
                 return False
 
+    def filter_confidence(self, items: list[dict]) -> list[dict]:
+        scores = []
+        dropped = []
+        for item in items:
+            if item["confidence"] > settings.llm_confidence_threshold:
+                scores.append(item)
+            else:
+                dropped.append(item)
 
+            log.info("Few items were dropped due to low confidence scores",  dropped_items = dropped)
+            return scores
 
 
 
