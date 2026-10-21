@@ -101,3 +101,16 @@ class LLMEngine:
 
         log.warning("failed to parse LLM response")
         return []
+
+    def to_suggestions(self, items: list[dict])-> list[Suggestion]:
+        suggestions = []
+        for item in items:
+            suggestions.append(Suggestion(
+                filename=,
+                severity=item["severity"],
+                category=item["category"],
+                title=item["title"],
+                description=item["description"]
+                line=item["line"],
+                source = "llm"
+            ))
