@@ -123,8 +123,14 @@ class LLMEngine:
                 dropped.append(item)
 
             log.info("Few items were dropped due to low confidence scores",  dropped_items = dropped)
-            return scores
+        return scores
 
+    def filter_duplicates(self, items: list[dict], existing: list[Suggestion])-> list[dict]:
+        item = []
+        for item in items:
+            for file in existing:
+                if item["filename"] == file.filename and item["line"] == file.line and item["category"] == file.category and item["severity"] == file.severity:
+                    items.remove(item)
 
 
     def to_suggestions(self, items: list[dict])-> list[Suggestion]:
@@ -141,3 +147,5 @@ class LLMEngine:
                 line=item["line"],
                 source = "llm"
             ))
+
+        return suggestions
