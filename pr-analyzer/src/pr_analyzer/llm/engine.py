@@ -47,18 +47,23 @@ class LLMEngine:
         client = Anthropic(settings.anthropic_api_key)
 
         responses = client.messages.create(
-            model=settings.llm_model
+            model= settings.llm_model,
+            max_tokens= 1024,
+            system=SYSTEM_PROMPT,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
         )
 
         return responses.content[0].text
+
+    
     def call_ollama(self, prompt:str, ) -> str:
         url = "http://localhost:11434/api/chat"
         payload = {
-            "model" = settings.llm_model,
-            "messages"= [
-                {"role"="system","content"= SYSTEM_PROMPT},
-                {"role"="user", "content"=prompt},
-            ],
+            "model" : settings.llm_model,
+            "messages":
+            [{"role":"system","content":SYSTEM_PROMPT},{"role":"user", "content":prompt},],
         }
 
         with httpx.Client(timeout=None) as client:
@@ -68,4 +73,4 @@ class LLMEngine:
                         data = json.loads(line)
                         if "message" in data and "content" in data["message"]:
                             print(data["message"]["content"], end="", flush=True)
-    def parse_reponse(self,raw:dict) -> list[dict]
+    def parse_reponse(self,raw:dict) -> list[dict]:
