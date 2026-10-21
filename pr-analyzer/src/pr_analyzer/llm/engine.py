@@ -2,6 +2,8 @@ import json
 import os
 import httpx
 import anthropic
+import openai
+import ollama
 from anthropic import Anthropic
 from openai import OpenAI
 from google import genai
@@ -36,28 +38,42 @@ class LLMEngine:
     
     def call_openai(self, prompt:str) -> str:
         client = OpenAI(settings.openai_api_key)
-        responses = client.responses.parse(
-            model = settings.llm_model,
-            response_format = {"type": "json_object"},
-            messages =[
-                {"role":"system", "content": SYSTEM_PROMPT},
-                {"role":"user", "content": prompt}
-            ]
-        )
+        try:
+            responses = client.responses.parse(
+                model = settings.llm_model,
+                response_format = {"type": "json_object"},
+                messages =[
+                    {"role":"system", "content": SYSTEM_PROMPT},
+                    {"role":"user", "content": prompt}
+                ]
+            )
+        except openai.APIConnectionError:
+            log.warning("API connection error")
+            return []
+        except openai.APITimeoutError:
+            log.warning("API timeout")
+            return []
 
         return responses.choices[0].message.content
     # TODO 
     def call_anthropic(self, prompt:str) -> str:
         client = anthropic.Anthropic()
+        try:
 
-        responses = client.messages.create(
-            model= settings.llm_model,
-            max_tokens= 1024,
-            system=SYSTEM_PROMPT,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
+            responses = client.messages.create(
+                model= settings.llm_model,
+                max_tokens= 1024,
+                system=SYSTEM_PROMPT,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+        except anthropic.APITimeoutError:
+            log.warning("API timeout error")
+            return []
+        except anthropic.APIConnectionError:
+            log.warning("API connection error")
+            return []
 
         return responses.content[0].text
 
@@ -69,14 +85,22 @@ class LLMEngine:
             "messages":
             [{"role":"system","content":SYSTEM_PROMPT},{"role":"user", "content":prompt},],
         }
+        try:
 
-        with httpx.Client(timeout=None) as client:
-            with client.stream("POST", url, json=payload) as response:
-                for line in response.iter_lines():
-                    if line.strip():
-                        data = json.loads(line)
-                        if "message" in data and "content" in data["message"]:
-                            print(data["message"]["content"], end="", flush=True)
+            with httpx.Client(timeout=None) as client:
+                with client.stream("POST", url, json=payload) as response:
+                    for line in response.iter_lines():
+                        if line.strip():
+                            data = json.loads(line)
+                            if "message" in data and "content" in data["message"]:
+                                response = data["message"]["content"], end="", flush=True
+        except httpx.TimeoutException:
+            log.warning("API timeout error")
+            return []
+        except httpx.ConnectError:
+            log.warning("API connection error")
+
+
     def parse_reponse(self,raw:dict) -> list[dict]:
         try:
             data = json.loads(raw)
