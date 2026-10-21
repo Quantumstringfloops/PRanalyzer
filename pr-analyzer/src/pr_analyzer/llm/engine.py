@@ -53,9 +53,12 @@ class LLMEngine:
         except openai.APITimeoutError:
             log.warning("API timeout")
             return []
+        except Exception as e:
+            log.warning("Error:", error=e)
 
         return responses.choices[0].message.content
-    # TODO 
+
+    
     def call_anthropic(self, prompt:str) -> str:
         client = anthropic.Anthropic()
         try:
@@ -74,7 +77,8 @@ class LLMEngine:
         except anthropic.APIConnectionError:
             log.warning("API connection error")
             return []
-
+        except Exception as e:
+            log.warning("Error:", error=e)
         return responses.content[0].text
 
     
@@ -99,6 +103,13 @@ class LLMEngine:
             return []
         except httpx.ConnectError:
             log.warning("API connection error")
+            return []
+        except httpx.ConnectTimeout:
+            log.warning("Connection refused")
+        except Exception as e:
+            log.warning("Error:", error=e)
+
+        return response
 
 
     def parse_reponse(self,raw:dict) -> list[dict]:
