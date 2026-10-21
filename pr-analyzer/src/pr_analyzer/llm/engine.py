@@ -1,6 +1,7 @@
 import json
 import os
 import httpx
+import anthropic
 from anthropic import Anthropic
 from openai import OpenAI
 from google import genai
@@ -27,6 +28,13 @@ class LLMEngine:
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
+        for file in PRSummary.files:
+            lines = file.patch.splitlines()
+            if len(lines)> settings.max_diff_lines:
+                lines = lines[:settings.max_diff_lines]
+                log.info("patch truncated", f = file.filename, original_line_count=len(lines))
+            
+
 
 
     
@@ -44,7 +52,7 @@ class LLMEngine:
         return responses.choices[0].message.content
     # TODO 
     def call_anthropic(self, prompt:str) -> str:
-        client = Anthropic(settings.anthropic_api_key)
+        client = anthropic.Anthropic()
 
         responses = client.messages.create(
             model= settings.llm_model,
@@ -74,3 +82,22 @@ class LLMEngine:
                         if "message" in data and "content" in data["message"]:
                             print(data["message"]["content"], end="", flush=True)
     def parse_reponse(self,raw:dict) -> list[dict]:
+        try:
+            data = json.loads(raw)
+            if isinstance(data,dict):
+                data = data.get("suggestions", list(data.values()[0]))
+            return data if isinstance(data, list) else[]
+        
+        except json.JSONDecodeError:
+            pass
+
+        start = raw.find("[")
+        end = raw.rfind("]")
+        if start != -1 and end != -1:
+            try:
+                return json.loads(raw[start:end+1])
+            except json.JSONDecodeError:
+                pass
+
+        log.warning("failed to parse LLM response")
+        return []

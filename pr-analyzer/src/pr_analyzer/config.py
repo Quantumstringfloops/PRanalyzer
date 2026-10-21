@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     llm_confidence_threshold: float = 0.5
     openai_api_key:str
+    
 
 
 
