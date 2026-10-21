@@ -102,6 +102,21 @@ class LLMEngine:
         log.warning("failed to parse LLM response")
         return []
 
+
+    def validate_suggestion(self, item: list)-> bool:
+        list_check = list(item)
+        for item in list_check:
+            if item.lower() in ["filename", "severity", "category", "title", "description", "confidence"]:
+                log.info("Valid output")
+                return True
+            else:
+                log.warn("Missing field(s)")
+                return False
+
+
+
+
+
     def to_suggestions(self, items: list[dict])-> list[Suggestion]:
         suggestions = []
         for item in items:
