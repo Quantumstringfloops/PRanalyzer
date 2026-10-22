@@ -4,7 +4,7 @@ import httpx
 url = "http://localhost:11434/api/chat"
 payload = {
     "model": "llama3.2",
-    "messages": [{"role": "user", "content": "Write a short poem."}],
+    "messages": [{"role": "user", "content": "what is the past tense of come"}],
     "stream": True,
 }
 try: 
