@@ -1,6 +1,6 @@
 import structlog
 from pr_analyzer.models import QualityScore, AnalysisResult,Suggestion,PRSummary
-
+from pr_analyzer.config import settings
 log = structlog.get_logger(__name__)
 
 SEVERITY_PENALTIES = {
@@ -33,7 +33,7 @@ BLOCK_SEVERITY = {"CRITICAL", "HIGH"}
 class Scorer:
     def score(self, suggestions: list[Suggestion], pr:PRSummary,base_score:float| None = None) -> QualityScore:
 
-    def _group_by_dimension(suggestions: list[Suggestion]) -> dict:
+    def _group_by_dimension(self, suggestions: list[Suggestion]) -> dict:
         groups = {}
 
         for dim in DIMENSION_WEIGHTS:
@@ -44,3 +44,12 @@ class Scorer:
                 groups[s.category].append(s)
 
         return groups
+
+    def _score_dimension(self, suggestions: list[Suggestion]):
+        score = 100
+        for s in suggestions:
+            penalty = SEVERITY_PENALTIES[s.severity]
+
+            score -= penalty * s.confidence
+        if score < 0: return 0
+        return score
