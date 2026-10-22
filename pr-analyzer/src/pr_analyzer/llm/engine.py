@@ -18,9 +18,12 @@ log = structlog.get_logger(__name__)
 
 class LLMEngine:
 
-    def analyze(self, pr:PRSummary, existing_findings:list[Suggestion]-> list[Suggestion]):
+    def analyze(self, pr:PRSummary, existing_findings:list[Suggestion])-> list[Suggestion]:
          # can take any provider
         provider = settings.llm_provider
+
+        prompt = build_prompts(pr, existing_findings, settings.max_diff_lines)
+
         if provider == "openai":
             raw = self._call_openai(prompt)
         elif provider == "anthropic":
@@ -30,11 +33,20 @@ class LLMEngine:
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
+        parsed = self.parse_reponse(raw)
+        validated = [ item for item in parsed if self.validate_suggestion(item)]
+        confidence = self.filter_confidence(validated)
+        duplicates = self.filter_duplicates(confidence)
+        suggestions = self.to_suggestions(duplicates)
+
         
-            
-
-
-
+        log.info("Details : ", 
+                 provider= provider, 
+                 model=settings.llm_model,
+                 count = len(suggestions)
+                
+            )
+        return suggestions
     
     def call_openai(self, prompt:str) -> str:
         client = OpenAI(settings.openai_api_key)
