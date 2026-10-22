@@ -26,21 +26,45 @@ security, maintainability, or reliability.
 
 
 def truncate_diff(diff:str, max_lines: str) -> str:
-    raw =""
     lines = diff.splitlines()
     if len(lines) > max_lines:
           lines = lines[:max_lines]
 
-    raw = "\n".join(lines)
-
-
-    return raw
+    return "\n".join(lines)
 
 
 def build_prompt(pr: PRSummary,diff: str,existing_findings: list[Suggestion],max_diff_lines: int):
     truncated_diff = truncate_diff(diff)
-    user_prompt = ""
+    pr_info = f"""
+        PR #{pr.number}: {pr.title}
+        Author: {pr.author}
+        Repo: {pr.repo}
+        Branch: {pr.head_branch} → {pr.base_branch}
+        Files changed: {len(pr.files)}
+        Total additions: {pr.total_additions}  deletions: {pr.total_deletions}
+        """
 
-    values = []
-    
-    string = f"{pr.title}, {pr.author}, {pr.repo}, {pr.head_branch}, {pr.base_branch}, {pr.total_additions}"
+    file_lines = []
+    for f in pr.files:
+        file_lines.append(f"  {f.filename} ({f.status}) +{f.additions} -{f.deletions}")
+    file_summary = "Changed files:\n" + "\n".join(file_lines)
+
+    raw_diff = ""
+    for f in pr.files:
+         if f.patch:
+              raw_diff = f"\n--- {f.filename} ---\n{f.patch}\n"
+    diff_section = "Diff:\n" + truncate_diff(raw_diff, max_diff_lines)
+
+
+    if existing_findings:
+        finding_lines = []
+        for s in existing_findings:
+            finding_lines.append(
+                f"  [{s.severity}] {s.filename} line {s.line}: {s.title}"
+            )
+        findings_section = "Already found by static/security scanners (do not repeat these):\n" + "\n".join(finding_lines)
+    else:
+        findings_section = "No existing findings."
+
+    # ── assemble ──────────────────────────────────────────────────────────────
+    return "\n\n".join([pr_info, file_summary, diff_section, findings_section])
