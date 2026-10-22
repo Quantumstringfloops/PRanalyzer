@@ -12,7 +12,7 @@ from ollama import Client
 
 import structlog
 from pr_analyzer.models import Suggestion, PRSummary
-from pr_analyzer.llm.prompts import build_prompts, SYSTEM_PROMPT
+from pr_analyzer.llm.prompts import build_prompt, SYSTEM_PROMPT
 from pr_analyzer.config import settings
 log = structlog.get_logger(__name__)
 
@@ -22,7 +22,7 @@ class LLMEngine:
          # can take any provider
         provider = settings.llm_provider
 
-        prompt = build_prompts(pr, existing_findings, settings.max_diff_lines)
+        prompt = build_prompt(pr, existing_findings, settings.max_diff_lines)
 
         if provider == "openai":
             raw = self.call_openai(prompt)
@@ -102,14 +102,14 @@ class LLMEngine:
             [{"role":"system","content":SYSTEM_PROMPT},{"role":"user", "content":prompt},],
         }
         try:
-
+            response =""
             with httpx.Client(timeout=None) as client:
                 with client.stream("POST", url, json=payload) as response:
                     for line in response.iter_lines():
                         if line.strip():
                             data = json.loads(line)
                             if "message" in data and "content" in data["message"]:
-                                response = data["message"]["content"], end="", flush=True
+                                response += data["message"]["content"]
         except httpx.TimeoutException:
             log.warning("API timeout error")
             return "[]"

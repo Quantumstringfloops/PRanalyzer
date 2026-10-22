@@ -1,5 +1,5 @@
 from pr_analyzer.models import PRSummary,Suggestion
-from config import settings
+from pr_analyzer.config import settings
 import structlog
 
 log = structlog.get_logger(__name__)
@@ -33,8 +33,7 @@ def truncate_diff(diff:str, max_lines: str) -> str:
     return "\n".join(lines)
 
 
-def build_prompt(pr: PRSummary,diff: str,existing_findings: list[Suggestion],max_diff_lines: int):
-    truncated_diff = truncate_diff(diff)
+def build_prompt(pr: PRSummary,existing_findings: list[Suggestion],max_diff_lines: int):
     pr_info = f"""
         PR #{pr.number}: {pr.title}
         Author: {pr.author}

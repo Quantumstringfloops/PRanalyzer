@@ -52,10 +52,10 @@ engine = LLMEngine()
 
 # ── test: mock openai call and validate parsing ───────────────────────────────
 def test_analyze_parses_mock_response():
-    with patch.object(engine, "_call_openai", return_value=MOCK_RESPONSE):
+    with patch.object(engine, "call_ollama", return_value=MOCK_RESPONSE):
         with patch("pr_analyzer.llm.engine.settings") as mock_settings:
-            mock_settings.llm_provider = "openai"
-            mock_settings.llm_model = "gpt-4o-mini"
+            mock_settings.llm_provider = "ollama"
+            mock_settings.llm_model = "llama3.2"
             mock_settings.max_diff_lines = 3000
             mock_settings.llm_confidence_threshold = 0.5
 
@@ -68,10 +68,10 @@ def test_analyze_parses_mock_response():
 
 # ── test: low confidence filtered ────────────────────────────────────────────
 def test_low_confidence_filtered():
-    with patch.object(engine, "_call_openai", return_value=MOCK_RESPONSE):
+    with patch.object(engine, "call_ollama", return_value=MOCK_RESPONSE):
         with patch("pr_analyzer.llm.engine.settings") as mock_settings:
-            mock_settings.llm_provider = "openai"
-            mock_settings.llm_model = "gpt-4o-mini"
+            mock_settings.llm_provider = "ollama"
+            mock_settings.llm_model = "llama3.2"
             mock_settings.max_diff_lines = 3000
             mock_settings.llm_confidence_threshold = 0.5
 
@@ -92,10 +92,10 @@ def test_duplicate_filtered():
         source="static"
     )]
 
-    with patch.object(engine, "_call_openai", return_value=MOCK_RESPONSE):
+    with patch.object(engine, "call_ollama", return_value=MOCK_RESPONSE):
         with patch("pr_analyzer.llm.engine.settings") as mock_settings:
-            mock_settings.llm_provider = "openai"
-            mock_settings.llm_model = "gpt-4o-mini"
+            mock_settings.llm_provider = "ollama"
+            mock_settings.llm_model = "llama3.2"
             mock_settings.max_diff_lines = 3000
             mock_settings.llm_confidence_threshold = 0.5
 
@@ -105,10 +105,10 @@ def test_duplicate_filtered():
 
 # ── test: broken JSON returns empty list ──────────────────────────────────────
 def test_broken_json_returns_empty():
-    with patch.object(engine, "_call_openai", return_value="not valid json at all"):
+    with patch.object(engine, "call_ollama", return_value="not valid json at all"):
         with patch("pr_analyzer.llm.engine.settings") as mock_settings:
-            mock_settings.llm_provider = "openai"
-            mock_settings.llm_model = "gpt-4o-mini"
+            mock_settings.llm_provider = "ollama"
+            mock_settings.llm_model = "llama3.2"
             mock_settings.max_diff_lines = 3000
             mock_settings.llm_confidence_threshold = 0.5
 
@@ -118,10 +118,10 @@ def test_broken_json_returns_empty():
 
 # ── test: clean diff returns empty list ──────────────────────────────────────
 def test_clean_diff_no_suggestions():
-    with patch.object(engine, "_call_openai", return_value="[]"):
+    with patch.object(engine, "call_ollama", return_value="[]"):
         with patch("pr_analyzer.llm.engine.settings") as mock_settings:
-            mock_settings.llm_provider = "openai"
-            mock_settings.llm_model = "gpt-4o-mini"
+            mock_settings.llm_provider = "ollama"
+            mock_settings.llm_model = "llama3.2"
             mock_settings.max_diff_lines = 3000
             mock_settings.llm_confidence_threshold = 0.5
 
