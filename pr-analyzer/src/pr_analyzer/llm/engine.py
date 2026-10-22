@@ -25,18 +25,18 @@ class LLMEngine:
         prompt = build_prompts(pr, existing_findings, settings.max_diff_lines)
 
         if provider == "openai":
-            raw = self._call_openai(prompt)
+            raw = self.call_openai(prompt)
         elif provider == "anthropic":
-            raw = self._call_anthropic(prompt)
+            raw = self.call_anthropic(prompt)
         elif provider == "ollama":
-            raw = self._call_ollama(prompt)
+            raw = self.call_ollama(prompt)
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
         parsed = self.parse_reponse(raw)
         validated = [ item for item in parsed if self.validate_suggestion(item)]
         confidence = self.filter_confidence(validated)
-        duplicates = self.filter_duplicates(confidence)
+        duplicates = self.filter_duplicates(confidence,existing_findings)
         suggestions = self.to_suggestions(duplicates)
 
         
@@ -49,9 +49,9 @@ class LLMEngine:
         return suggestions
     
     def call_openai(self, prompt:str) -> str:
-        client = OpenAI(settings.openai_api_key)
+        client = OpenAI(api_key=settings.openai_api_key)
         try:
-            responses = client.responses.parse(
+            responses = client.chat.completions.create(
                 model = settings.llm_model,
                 response_format = {"type": "json_object"},
                 messages =[
@@ -61,10 +61,10 @@ class LLMEngine:
             )
         except openai.APIConnectionError:
             log.warning("API connection error")
-            return []
+            return "[]"
         except openai.APITimeoutError:
             log.warning("API timeout")
-            return []
+            return "[]"
         except Exception as e:
             log.warning("Error:", error=e)
 
@@ -85,10 +85,10 @@ class LLMEngine:
             )
         except anthropic.APITimeoutError:
             log.warning("API timeout error")
-            return []
+            return "[]"
         except anthropic.APIConnectionError:
             log.warning("API connection error")
-            return []
+            return "[]"
         except Exception as e:
             log.warning("Error:", error=e)
         return responses.content[0].text
@@ -112,14 +112,16 @@ class LLMEngine:
                                 response = data["message"]["content"], end="", flush=True
         except httpx.TimeoutException:
             log.warning("API timeout error")
-            return []
+            return "[]"
         except httpx.ConnectError:
             log.warning("API connection error")
-            return []
+            return "[]"
         except httpx.ConnectTimeout:
             log.warning("Connection refused")
+            return "[]"
         except Exception as e:
             log.warning("Error:", error=e)
+            return "[]"
 
         return response
 
@@ -128,7 +130,7 @@ class LLMEngine:
         try:
             data = json.loads(raw)
             if isinstance(data,dict):
-                data = data.get("suggestions", list(data.values()[0]))
+                data = data.get("suggestions", list(data.values())[0])
             return data if isinstance(data, list) else[]
         
         except json.JSONDecodeError:
@@ -147,14 +149,8 @@ class LLMEngine:
 
 
     def validate_suggestion(self, item: dict)-> bool:
-        list_check = list(item)
-        for item in list_check:
-            if item.lower() in ["filename", "severity", "category", "title", "description", "confidence"]:
-                log.info("Valid output")
-                return True
-            else:
-                log.warn("Missing field(s)")
-                return False
+        REQUIRED = {"filename", "severity", "category", "title", "description", "confidence"}
+        return REQUIRED.issubset(set(item.keys()))
 
     def filter_confidence(self, items: list[dict]) -> list[dict]:
         scores = []
@@ -165,22 +161,27 @@ class LLMEngine:
             else:
                 dropped.append(item)
 
-            log.info("Few items were dropped due to low confidence scores",  dropped_items = dropped)
+        log.info("Few items were dropped due to low confidence scores",  dropped_items = dropped)
         return scores
 
     def filter_duplicates(self, items: list[dict], existing: list[Suggestion])-> list[dict]:
-        item = []
+        keep = []
         for item in items:
-            for file in existing:
-                if item["filename"] == file.filename and item["line"] == file.line and item["category"] == file.category and item["severity"] == file.severity:
-                    items.remove(item)
+            is_duplicate = any(
+                item["filename"] == e.filename and
+                item["line"] == e.line and
+                item["category"] == e.category
+                for e in existing
+            )
+            if not is_duplicate:
+                keep.append(item)
+        return keep
 
 
     def to_suggestions(self, items: list[dict])-> list[Suggestion]:
         suggestions = []
         for item in items:
-            file_list = item["filename"].strip("/").split("/")
-            file_name = file_list[-1]
+            file_name = item["filename"]
             suggestions.append(Suggestion(
                 filename=file_name,
                 severity=item["severity"],
