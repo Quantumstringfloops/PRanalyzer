@@ -189,7 +189,8 @@ class LLMEngine:
                 title=item["title"],
                 description=item["description"],
                 line=item["line"],
-                source = "llm"
+                source = "llm",
+                confidence=item["confidence"]
             ))
 
         return suggestions

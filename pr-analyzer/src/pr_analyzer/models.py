@@ -34,6 +34,7 @@ class Suggestion:
     description: str      # longer explanation shown in detail panel
     line: int | None = None       # line number in the file if known
     source: str = "static"        # "static" | "security" | "llm"
+    confidence: float = 1.0
     
 @dataclass
 class QualityScore:
