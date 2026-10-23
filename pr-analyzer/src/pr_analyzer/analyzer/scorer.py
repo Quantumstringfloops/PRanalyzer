@@ -31,7 +31,36 @@ BLOCK_SEVERITY = {"CRITICAL", "HIGH"}
 
 
 class Scorer:
-    def score(self, suggestions: list[Suggestion], pr:PRSummary,base_score:float| None = None) -> QualityScore:
+    def score(self, suggestions: list[Suggestion], pr:PRSummary,base:float| None = None) -> QualityScore:
+        
+
+        dimension_groups = self._group_by_dimension(suggestions)
+        dimension_scores = {
+            dim: self._score_dimension(dimension_groups[dim])
+            for dim in DIMENSION_WEIGHTS
+        }
+        weighted_score = self._compute_weighted_scores(dimension_groups)
+        grade = self._map_grade(weighted_score)
+        check_passed = self._check_passed(suggestions)
+        delta = self._compute_delta()
+        summary = self._write_summary(suggestions)
+
+        critical_count = sum(1 for s in suggestions if s.severity == "CRITICAL")
+        high_count = sum(1 for s in suggestions if s.severity == "HIGH") 
+
+        return QualityScore(
+            overall_score=weighted_score,
+            grade=grade,
+            passed = check_passed,
+            summary=summary,
+            delta=delta,
+            dimension_scores=dimension_scores,
+            critical_count= critical_count,
+            high_count=high_count
+        )
+
+        
+
 
     def _group_by_dimension(self, suggestions: list[Suggestion]) -> dict:
         groups = {}
@@ -82,4 +111,4 @@ class Scorer:
             return f"{high} high severity issue(s) found"
         if score >= 90:
             return "Clean pass — no significant issues"
-        return f"{len(suggestions)} issue(s) found across multiple files
+        return f"{len(suggestions)} issue(s) found across multiple files"
