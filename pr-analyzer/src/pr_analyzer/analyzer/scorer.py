@@ -63,3 +63,23 @@ class Scorer:
             if score >= minimum:
                 return grade
         return "F"
+
+    def _check_passed(self, suggestions: list[Suggestion]) -> bool:
+        return not any(s.severity in BLOCK_SEVERITY for s in suggestions)
+
+    def _compute_delta(self, overall:float, base:float) -> float:
+        if base is None:
+            return None
+        return round(overall - base, 2)
+    
+    def _write_summary(self, suggestions: list[Suggestion], score: float) -> str:
+        critical = sum(1 for s in suggestions if s.severity == "CRITICAL")
+        high = sum(1 for s in suggestions if s.severity == "HIGH")
+
+        if critical:
+            return f"{critical} critical issue(s) found — review required"
+        if high:
+            return f"{high} high severity issue(s) found"
+        if score >= 90:
+            return "Clean pass — no significant issues"
+        return f"{len(suggestions)} issue(s) found across multiple files
