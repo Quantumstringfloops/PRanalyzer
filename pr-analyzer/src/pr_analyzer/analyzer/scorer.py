@@ -39,11 +39,11 @@ class Scorer:
             dim: self._score_dimension(dimension_groups[dim])
             for dim in DIMENSION_WEIGHTS
         }
-        weighted_score = self._compute_weighted_scores(dimension_groups)
+        weighted_score = self._compute_weighted_scores(dimension_scores)
         grade = self._map_grade(weighted_score)
         check_passed = self._check_passed(suggestions)
         delta = self._compute_delta()
-        summary = self._write_summary(suggestions)
+        summary = self._write_summary(suggestions,weighted_score)
 
         critical_count = sum(1 for s in suggestions if s.severity == "CRITICAL")
         high_count = sum(1 for s in suggestions if s.severity == "HIGH") 
