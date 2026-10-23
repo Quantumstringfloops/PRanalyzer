@@ -29,7 +29,7 @@ class PRSummary:
 class Suggestion:
     filename: str
     severity: str         # "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
-    category: str         # "style" | "security" | "complexity" | "performance" | "documentation" | "testing"
+    category: str         # "style" | "security" | "complexity" | "documentation" | "testing"
     title: str            # short label shown in the table
     description: str      # longer explanation shown in detail panel
     line: int | None = None       # line number in the file if known

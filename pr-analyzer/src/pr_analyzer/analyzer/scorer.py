@@ -14,7 +14,6 @@ DIMENSION_WEIGHTS = {
     "security" : 0.35,
     "style" : 0.15,
     "complexity" : 0.25,
-    "performance" : 0.25,
     "documentation" : 0.15,
     "testing" : 0.10,
 }
@@ -42,7 +41,7 @@ class Scorer:
         weighted_score = self._compute_weighted_scores(dimension_scores)
         grade = self._map_grade(weighted_score)
         check_passed = self._check_passed(suggestions)
-        delta = self._compute_delta()
+        delta = self._compute_delta(weighted_score, base)
         summary = self._write_summary(suggestions,weighted_score)
 
         critical_count = sum(1 for s in suggestions if s.severity == "CRITICAL")

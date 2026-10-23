@@ -1,5 +1,5 @@
 import pytest
-from pr_analyzer.analyzers.scorer import Scorer
+from pr_analyzer.analyzer.scorer import Scorer
 from pr_analyzer.models import Suggestion, PRSummary
 
 def make_suggestion(severity="HIGH", category="security", confidence=1.0):
@@ -33,6 +33,11 @@ def test_single_critical_scores_below_65():
     result = scorer.score([make_suggestion(severity="CRITICAL")], make_pr())
     assert result.overall_score < 65
 
+def test_single_critical_scores_below_90():
+    result = scorer.score([make_suggestion(severity="CRITICAL")], make_pr())
+    assert result.overall_score < 90
+    assert result.passed is False
+    
 def test_critical_sets_passed_false():
     result = scorer.score([make_suggestion(severity="CRITICAL")], make_pr())
     assert result.passed is False
