@@ -45,7 +45,7 @@ class Scorer:
 
         return groups
 
-    def _score_dimension(self, suggestions: list[Suggestion]):
+    def _score_dimension(self, suggestions: list[Suggestion]) -> float:
         score = 100
         for s in suggestions:
             penalty = SEVERITY_PENALTIES[s.severity]
@@ -53,3 +53,13 @@ class Scorer:
             score -= penalty * s.confidence
         if score < 0: return 0
         return score
+
+    def _compute_weighted_scores(self, dimension_scores:dict)-> float:
+        weighted_scores = sum(dimension_scores[dim]* DIMENSION_WEIGHTS[dim] for dim in DIMENSION_WEIGHTS)
+        return weighted_scores
+
+    def _map_grade(self, score: float) -> str:
+        for minimum, grade in GRADE_THRESHOLDS:
+            if score >= minimum:
+                return grade
+        return "F"
