@@ -1,6 +1,6 @@
 PR Analyzer
 
-CI
+[![CI](https://github.com/Quantumstingfloops/PRanalyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/Quantumstringfloops/PRanalyzer/actions/workflows/ci.yml)
 
 An AI-powered pull request analysis tool that combines static analysis, security scanning, and LLM review into a single CLI command. Point it at any GitHub PR URL and it returns a quality score, a letter grade, inline code suggestions, and an optional GitHub review comment — all in under 30 seconds.
 
