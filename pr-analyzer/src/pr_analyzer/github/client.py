@@ -123,3 +123,28 @@ class GithubClient:
             )) 
         log.info("Fetching of files was succesful", repo=repo.name, pr=pr.number, file_count = pr.changed_files)
         return files
+
+    def post_review(self, pr: PRSummary, body: str, comments: list[tuple]) -> None:
+        repo_name, pr_number = self.parse_url_and_validate(
+            f"https://github.com/{pr.repo}/pull/{pr.number}"
+        )
+        repo = self.github.get_repo(repo_name)
+        pull = repo.get_pull(pr_number)
+
+        # build inline comments list for GitHub API
+        review_comments = []
+        for suggestion, position in comments:
+            review_comments.append({
+                "path":     suggestion.filename,
+                "position": position,
+                "body":     f"**{suggestion.severity}** — {suggestion.title}\n\n{suggestion.description}",
+            })
+
+        # post the review
+        pull.create_review(
+            body=body,
+            event="COMMENT",
+            comments=review_comments,
+        )
+
+        log.info("review posted", pr=pr.number, comments=len(review_comments))
