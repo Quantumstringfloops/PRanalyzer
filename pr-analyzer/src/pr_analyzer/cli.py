@@ -10,11 +10,7 @@ from pr_analyzer.exceptions import (
     RepositoryNotFoundError,
     PRAnalyzerError,
 )
-from reporting.rich_reporter import (
-    print_rich_report,
-    print_json_report,
-    print_markdown_report,
-)
+from pr_analyzer.reporting.rich_reporter import RichReporter
 
 # creates the Typer app — this is what powers the CLI
 # add_completion=False removes the shell autocomplete install prompt
@@ -87,11 +83,11 @@ def analyze(
     # hand off to the correct reporter — cli.py never prints anything itself
     # rich is the default, json and markdown are for CI and sharing
     if output == "json":
-        print_json_report(result)
+        RichReporter.print_json_report(result)
     elif output == "markdown":
-        print_markdown_report(result)
+        RichReporter.print_markdown_report(result)
     else:
-        print_rich_report(result)
+        RichReporter.print_rich_report(result)
 
     # exit code is the only thing cli.py "returns" to the terminal
     # code 1 means blocked — CI systems use this to fail the pipeline

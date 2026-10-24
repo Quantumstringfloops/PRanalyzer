@@ -6,8 +6,6 @@ import openai
 import ollama
 from anthropic import Anthropic
 from openai import OpenAI
-from google import genai
-from google.genai import types
 from ollama import Client
 
 import structlog
