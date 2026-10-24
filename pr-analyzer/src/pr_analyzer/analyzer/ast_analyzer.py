@@ -208,7 +208,7 @@ class StaticAnalyzer:
         lang = get_language(file.filename)
         if lang is None:
             return []
-        LANGUAGE = Language(lang)
+        LANGUAGE = lang
         parser = Parser(LANGUAGE)
 
         source = bytes(file.raw_content, "utf-8")
