@@ -5,6 +5,7 @@ from rich.color import Color
 from rich.console import Console 
 from rich import inspect
 from rich.json import JSON
+from rich.table import Table
 
 
 print("PANEL")
