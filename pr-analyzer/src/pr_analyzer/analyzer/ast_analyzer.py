@@ -1,4 +1,5 @@
 import re
+import os
 from tree_sitter import Language, Parser
 import tree_sitter_python as tspython
 import tree_sitter_typescript as tstypescript
@@ -141,10 +142,8 @@ def extract_line_numbers(patch: str, match_position:int) -> int|None:
     return current_line
 
 def get_language(filename:str):
-    path_parts = filename.strip('/').split('/')
-    file = path_parts[-1].file.split(".").strip(".")
-    file_type = file[-1]
-    language = LANGUAGE_MAP.get(file_type)
+    ext = os.path.splitext(filename)[1]
+    language = LANGUAGE_MAP.get(ext)
 
     if language is None:
         return None

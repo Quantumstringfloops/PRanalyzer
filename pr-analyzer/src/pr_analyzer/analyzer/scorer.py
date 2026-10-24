@@ -30,7 +30,7 @@ BLOCK_SEVERITY = {"CRITICAL", "HIGH"}
 
 
 class Scorer:
-    def score(self, suggestions: list[Suggestion], pr:PRSummary,base:float| None = None) -> QualityScore:
+    def score(self, suggestions: list[Suggestion],base:float| None = None) -> QualityScore:
         
 
         dimension_groups = self._group_by_dimension(suggestions)
