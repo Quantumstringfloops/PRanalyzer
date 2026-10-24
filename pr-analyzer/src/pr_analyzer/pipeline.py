@@ -43,6 +43,30 @@ class AnalysisPipeline:
             log.info("skipping LLM analysis")
 
 
+        all_suggestions = llm_suggestions + static_analysis + security_analysis
+
+        log.info("Scoring: ")
+        score = self.scorer.score(all_suggestions)
+
+        duration = round(time.time() - start, 2)
+
+        log.info("pipeline complete",
+                 score=score.overall_score,
+                 grade=score.grade,
+                 passed=score.passed,
+                 duration=duration
+        )
+        
+        return AnalysisResult(
+            pr: pr,
+            suggestions = all_suggestions,
+            score=score,
+            passed=score.passed,
+            analysis_duration_seconds=duration,
+            llm_provider_used=None if skip_llm else settings.llm_provider
+        )
+
+
     def run_and_post(self, url: str, skip_llm: bool = False) -> AnalysisResult:
         pass
 
