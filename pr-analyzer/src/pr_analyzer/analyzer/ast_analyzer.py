@@ -148,13 +148,13 @@ def get_language(filename:str):
     if language is None:
         return None
     if language == "python":
-        return Language(tspython.language())
+        return tspython.language(), language
     if language == "javascript":
-        return Language(tsjavascript.language())
+        return tsjavascript.language(), language
     if language == "tsx":
-        return Language(tstypescript.language_tsx())
+        return tstypescript.language_tsx(), language
     if language == "typescript":
-        return Language(tstypescript.language_typescript())
+        return tstypescript.language_typescript(), language
 
 
 def count_complexity(node) -> int:
@@ -205,12 +205,12 @@ class StaticAnalyzer:
         suggestions = []
         if file.raw_content is None:
             return []
-        lang = get_language(file.filename)
+        lang , language = get_language(file.filename)
         if lang is None:
             return []
-        LANGUAGE = lang
-        parser = Parser(LANGUAGE)
-
+        LANGUAGE = Language(lang, language)
+        parser = Parser()
+        parser.set_language(LANGUAGE)
         source = bytes(file.raw_content, "utf-8")
         tree = parser.parse(source)
 

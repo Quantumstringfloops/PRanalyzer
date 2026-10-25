@@ -11,12 +11,14 @@ from pr_analyzer.config import settings
 
 log = structlog.get_logger(__name__)
 class AnalysisPipeline:
-    def __init__(self):
+    def __init__(self, skip_llm: bool = False, post_review: bool= False):
             self.github   = GithubClient()
             self.static   = StaticAnalyzer()
             self.security = SecurityScanner()
             self.llm      = LLMEngine()
             self.scorer   = Scorer()
+            self.skip_llm = skip_llm
+            self.post_review = post_review
 
     def run(self, url: str, skip_llm: bool = False) -> AnalysisResult:
         start = time.time()
