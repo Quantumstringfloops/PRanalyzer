@@ -55,4 +55,5 @@ class AnalysisResult:
     passed: bool                   # False if blocking issues found
     analysis_duration_seconds: float
     llm_provider_used: str | None
+    duration: float
 

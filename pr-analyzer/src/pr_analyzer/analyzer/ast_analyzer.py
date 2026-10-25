@@ -141,20 +141,21 @@ def extract_line_numbers(patch: str, match_position:int) -> int|None:
 
     return current_line
 
-def get_language(filename:str):
+import ctypes
+
+def get_language(filename: str):
     ext = os.path.splitext(filename)[1]
     language = LANGUAGE_MAP.get(ext)
-
     if language is None:
         return None
     if language == "python":
-        return tspython.language(), language
+        return Language(tspython.language())
     if language == "javascript":
-        return tsjavascript.language(), language
+        return Language(tsjavascript.language()).value
     if language == "tsx":
-        return tstypescript.language_tsx(), language
+        return Language(tstypescript.language_tsx())
     if language == "typescript":
-        return tstypescript.language_typescript(), language
+        return Language(tstypescript.language_typescript())
 
 
 def count_complexity(node) -> int:
@@ -205,12 +206,13 @@ class StaticAnalyzer:
         suggestions = []
         if file.raw_content is None:
             return []
-        lang , language = get_language(file.filename)
+        lang = get_language(file.filename)
+
         if lang is None:
             return []
-        LANGUAGE = Language(lang, language)
-        parser = Parser()
-        parser.set_language(LANGUAGE)
+        
+
+        parser = Parser(lang)
         source = bytes(file.raw_content, "utf-8")
         tree = parser.parse(source)
 

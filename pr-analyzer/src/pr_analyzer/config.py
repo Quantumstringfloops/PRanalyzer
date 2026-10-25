@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     github_token : str = "test_token"
     max_diff_lines: int = 3000
     llm_provider: str = "ollama"      # "openai" | "anthropic" | "ollama"
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "llama3.2"
     llm_confidence_threshold: float = 0.5
     openai_api_key:str=""
     

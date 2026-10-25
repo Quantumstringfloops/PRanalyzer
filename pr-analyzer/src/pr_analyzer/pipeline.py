@@ -66,6 +66,7 @@ class AnalysisPipeline:
             passed=score.passed,
             analysis_duration_seconds=duration,
             llm_provider_used=None if skip_llm else settings.llm_provider,
+            duration=duration
             )
 
 

@@ -1,4 +1,5 @@
 import typer
+import time
 from typing import Annotated
 from pr_analyzer.logging_config import setup_logging
 from pr_analyzer.pipeline import AnalysisPipeline
@@ -39,6 +40,7 @@ def analyze(
 
     # run the pipeline — this is the only business logic cli.py triggers
     # everything else is just error handling and output routing
+    start = time.time()
     try:
         pipeline = AnalysisPipeline(skip_llm=skip_llm, post_review=post_review)
         result = pipeline.run(pr_url)
@@ -79,7 +81,7 @@ def analyze(
         # catch-all for any other known error from the pipeline
         typer.echo(f"Analysis failed: {e}", err=True)
         raise typer.Exit(code=2)
-
+    duration = round(time.time()- start ,2)
     # hand off to the correct reporter — cli.py never prints anything itself
     # rich is the default, json and markdown are for CI and sharing
     if output == "json":
@@ -87,7 +89,7 @@ def analyze(
     elif output == "markdown":
         RichReporter.print_markdown_report(result)
     else:
-        RichReporter.print_rich_report(result)
+        RichReporter.print_rich_report(result, duration)
 
     # exit code is the only thing cli.py "returns" to the terminal
     # code 1 means blocked — CI systems use this to fail the pipeline
