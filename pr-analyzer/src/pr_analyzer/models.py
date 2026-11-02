@@ -23,6 +23,7 @@ class PRSummary:
     total_deletions: int
     is_draft: bool
     files: list[FileChange] = field(default_factory=list)
+    head_sha: str = ""    # commit the analysis ran against; reviews are pinned to it
 
 
 @dataclass
