@@ -1,16 +1,21 @@
-import re 
-from pr_analyzer.models import Suggestion, FileChange
+import re
+
 import structlog
-from pr_analyzer.security.semgrep_runner import SemgrepRunner
+
+from pr_analyzer.analyzer.ast_analyzer import CODE_EXTENSIONS, file_extension, is_comment
+from pr_analyzer.diff import iter_added_lines
+from pr_analyzer.models import FileChange, Suggestion
 from pr_analyzer.security.dep_auditor import DepAuditScanner
+from pr_analyzer.security.semgrep_runner import SemgrepRunner
 
 log = structlog.get_logger(__name__)
 
-
+# Every pattern runs on one added line at a time, so a match can't span lines and its line
+# number is exact. Secrets are checked in every file, comments included.
 SECRET_PATTERNS = [
     {
         "id": "aws_access_key",
-        "regex": re.compile(r'AKIA[0-9A-Z]{16}', re.MULTILINE),
+        "regex": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
         "severity": "CRITICAL",
         "category": "security",
         "title": "AWS access key exposed",
@@ -18,7 +23,8 @@ SECRET_PATTERNS = [
     },
     {
         "id": "generic_api_key",
-        "regex": re.compile(r'(?i)(api_key|apikey|api_secret)\s*=\s*["\'][a-zA-Z0-9]{16,}["\']', re.MULTILINE),
+        "regex": re.compile(r"(?i)(api[_-]?key|apikey|api[_-]?secret)\s*[:=]\s*[\"']([A-Za-z0-9_\-]{16,})[\"']"),
+        "value_group": 2,
         "severity": "CRITICAL",
         "category": "security",
         "title": "Hardcoded API key",
@@ -26,7 +32,7 @@ SECRET_PATTERNS = [
     },
     {
         "id": "private_pem",
-        "regex": re.compile(r'-----BEGIN (RSA |EC )?PRIVATE KEY-----', re.MULTILINE),
+        "regex": re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----"),
         "severity": "CRITICAL",
         "category": "security",
         "title": "Private key exposed",
@@ -34,15 +40,15 @@ SECRET_PATTERNS = [
     },
     {
         "id": "github_pat",
-        "regex": re.compile(r'gh[ps]_[a-zA-Z0-9]{36}', re.MULTILINE),
+        "regex": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,})\b"),
         "severity": "CRITICAL",
         "category": "security",
         "title": "GitHub personal access token exposed",
-        "description": "A GitHub PAT was found hardcoded. Revoke it immediately at github.com/settings/tokens.",
+        "description": "A GitHub token was found hardcoded. Revoke it immediately at github.com/settings/tokens.",
     },
     {
         "id": "jwt_token",
-        "regex": re.compile(r'eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}', re.MULTILINE),
+        "regex": re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
         "severity": "HIGH",
         "category": "security",
         "title": "JWT token hardcoded",
@@ -50,7 +56,8 @@ SECRET_PATTERNS = [
     },
     {
         "id": "hardcoded_password",
-        "regex": re.compile(r'(?i)(password|passwd|pwd)\s*=\s*["\'][^"\']{4,}["\']', re.MULTILINE),
+        "regex": re.compile(r"(?i)(?:password|passwd|pwd)\s*[:=]\s*[\"']([^\"']{4,})[\"']"),
+        "value_group": 1,
         "severity": "CRITICAL",
         "category": "security",
         "title": "Hardcoded password",
@@ -58,7 +65,10 @@ SECRET_PATTERNS = [
     },
     {
         "id": "db_connection_string",
-        "regex": re.compile(r'(?i)(postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@', re.MULTILINE),
+        "regex": re.compile(
+            r"(?i)\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?)://"
+            r"[^\s:/@\"']+:[^\s@/\"']+@"
+        ),
         "severity": "CRITICAL",
         "category": "security",
         "title": "Database connection string with credentials",
@@ -66,10 +76,16 @@ SECRET_PATTERNS = [
     },
 ]
 
+# Checked only in source files, and never on comment lines.
 DANGEROUS_PATTERNS = [
     {
         "id": "sql_injection",
-        "regex": re.compile(r'execute\s*\(\s*["\'].*%s.*["\']|execute\s*\(\s*f["\']', re.MULTILINE),
+        # an f-string, or a string literal followed by %, .format( or + ; parameterised calls such
+        # as execute("... %s", (value,)) are the safe form and are not flagged
+        "regex": re.compile(
+            r"\bexecute(?:many)?\s*\(\s*"
+            r"(?:[rRbBuU]?[fF][rR]?[\"']|[\"'][^\"']*[\"']\s*(?:%|\.format\s*\(|\+))"
+        ),
         "severity": "HIGH",
         "category": "security",
         "title": "Possible SQL injection",
@@ -77,7 +93,7 @@ DANGEROUS_PATTERNS = [
     },
     {
         "id": "eval_usage",
-        "regex": re.compile(r'\beval\s*\(', re.MULTILINE),
+        "regex": re.compile(r"(?<![\w.])eval\s*\("),   # not model.eval() or my_eval()
         "severity": "HIGH",
         "category": "security",
         "title": "eval() usage detected",
@@ -85,7 +101,7 @@ DANGEROUS_PATTERNS = [
     },
     {
         "id": "pickle_load",
-        "regex": re.compile(r'\bpickle\.load\s*\(', re.MULTILINE),
+        "regex": re.compile(r"\bpickle\.loads?\s*\("),
         "severity": "HIGH",
         "category": "security",
         "title": "pickle.load() usage detected",
@@ -93,7 +109,9 @@ DANGEROUS_PATTERNS = [
     },
     {
         "id": "yaml_unsafe_load",
-        "regex": re.compile(r'\byaml\.load\s*\([^)]*\)(?!\s*#.*safe)', re.MULTILINE),
+        "regex": re.compile(
+            r"\byaml\.(?:unsafe_load\s*\(|load\s*\((?![^)]*Loader\s*=\s*(?:yaml\.)?C?SafeLoader\b))"
+        ),
         "severity": "HIGH",
         "category": "security",
         "title": "yaml.load() without SafeLoader",
@@ -101,7 +119,7 @@ DANGEROUS_PATTERNS = [
     },
     {
         "id": "subprocess_shell",
-        "regex": re.compile(r'subprocess\.(run|call|Popen)\s*\(.*shell\s*=\s*True', re.MULTILINE),
+        "regex": re.compile(r"\bsubprocess\.(?:run|call|check_call|check_output|Popen)\s*\(.*\bshell\s*=\s*True"),
         "severity": "HIGH",
         "category": "security",
         "title": "subprocess with shell=True",
@@ -109,7 +127,11 @@ DANGEROUS_PATTERNS = [
     },
     {
         "id": "random_for_secrets",
-        "regex": re.compile(r'\brandom\.(random|randint|choice|randrange)\s*\(', re.MULTILINE),
+        # only when the value looks security-related; random is fine for jitter or shuffling
+        "regex": re.compile(
+            r"(?i)\b\w*(?:token|passw|secret|otp|nonce|salt|session|api_?key)\w*\s*=.*"
+            r"\brandom\.(?:random|randint|choice|choices|randrange|getrandbits)\s*\("
+        ),
         "severity": "MEDIUM",
         "category": "security",
         "title": "Non-cryptographic random used",
@@ -117,7 +139,7 @@ DANGEROUS_PATTERNS = [
     },
     {
         "id": "debug_mode",
-        "regex": re.compile(r'\bdebug\s*=\s*True', re.MULTILINE | re.IGNORECASE),
+        "regex": re.compile(r"(?i)\bdebug\s*=\s*True\b"),
         "severity": "MEDIUM",
         "category": "security",
         "title": "Debug mode enabled",
@@ -125,67 +147,47 @@ DANGEROUS_PATTERNS = [
     },
 ]
 
-def get_added_lines(patch:str) -> str:
-    added_lines = ""
-    if not patch : 
-        return ""
-    for line in patch.splitlines():
-        if line.startswith('+++'):
-            continue
-        if line.startswith("+"):
-            added_lines += line[1:] + "\n"
+# obvious placeholders in examples and docs are not leaked secrets
+PLACEHOLDER = re.compile(
+    r"(?i)^(?:x+|\*+|\.+|<[^>]*>|\$\{[^}]*\}|\{\{?[^}]*\}\}?|%\([^)]*\)s|"
+    r".*(?:changeme|change_me|example|placeholder|dummy|redacted|"
+    r"your[_-]?(?:api[_-]?)?(?:key|token|password|secret)).*)$"
+)
 
-    return added_lines
-
-
-def extract_line_numbers(patch: str, match_position:int) -> int|None:
-    hunk_pattern = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-    current_line = None
-    current_hunk_start_pos = None
-
-    for hunk_match in hunk_pattern.finditer(patch):
-        if hunk_match.start() <= match_position:
-            current_line = int(hunk_match.group(1))
-            current_hunk_start_pos = hunk_match.end()
-        else:
-            break
-
-    if current_line is None:
-        return None
-
-    chunk = patch[current_hunk_start_pos:match_position]
-
-    for line in chunk.splitlines():
-        if line.startswith("-"):
-            continue          # removed line — doesn't exist in new file
-        current_line += 1     # added (+) and context lines both count
-
-    return current_line
 
 class SecurityScanner:
+
+    def __init__(self, semgrep: SemgrepRunner | None = None, dep_auditor: DepAuditScanner | None = None):
+        self.semgrep = semgrep or SemgrepRunner()
+        self.dep_auditor = dep_auditor or DepAuditScanner()
+        self.warnings: list[str] = []
+
     def scan(self, files: list[FileChange]) -> list[Suggestion]:
         suggestions = []
         for file in files:
-            if file.status == "removed":
+            if file.status == "removed" or not file.patch:
                 continue
-            if file.raw_content is None:
-                continue
+            # works from the patch alone, so files whose full content couldn't be fetched are
+            # still checked
             suggestions.extend(self.scan_secrets(file))
             suggestions.extend(self.scan_dangerous(file))
-            suggestions.extend(SemgrepRunner().scan(files))
-            suggestions.extend(DepAuditScanner().scan(files))
+
+        # the external tools run once per PR, not once per file
+        suggestions.extend(self.semgrep.scan(files))
+        suggestions.extend(self.dep_auditor.scan(files))
+        self.warnings = self.semgrep.warnings + self.dep_auditor.warnings
 
         seen = set()
         unique = []
         for s in suggestions:
-            key = (s.filename, s.title, s.line)
+            key = (s.filename, s.line, s.title, s.description)
             if key not in seen:
                 seen.add(key)
                 unique.append(s)
 
         # summary log
-        critical= sum(1 for s in unique if s.severity == "CRITICAL")
-        high= sum(1 for s in unique if s.severity == "HIGH")
+        critical = sum(1 for s in unique if s.severity == "CRITICAL")
+        high = sum(1 for s in unique if s.severity == "HIGH")
         medium = sum(1 for s in unique if s.severity == "MEDIUM")
         low = sum(1 for s in unique if s.severity == "LOW")
 
@@ -200,47 +202,45 @@ class SecurityScanner:
 
         return unique
 
-            
     def scan_secrets(self, file: FileChange) -> list[Suggestion]:
-        suggestions = []
         if file.patch is None:
             return []
-        added_lines = get_added_lines(file.patch)
 
-        for pattern in SECRET_PATTERNS:
-            for match in pattern["regex"].finditer(added_lines):
-                line = extract_line_numbers(file.patch, match.start())
-                suggestions.append(Suggestion(
-                    filename= file.filename,
-                    severity=pattern["severity"],
-                    category=pattern["category"],
-                    title=pattern["title"],
-                    description=pattern["description"],
-                    line=line,
-                    source="security"
-                )) 
+        suggestions = []
+        for line_no, text in iter_added_lines(file.patch):
+            for pattern in SECRET_PATTERNS:
+                match = pattern["regex"].search(text)
+                if match is None:
+                    continue
+                group = pattern.get("value_group")
+                if group is not None and PLACEHOLDER.match(match.group(group)):
+                    continue
+                suggestions.append(self._suggestion(file, pattern, line_no))
 
         return suggestions
 
-    
     def scan_dangerous(self, file: FileChange) -> list[Suggestion]:
-        suggestions = []
-        if file.patch is None:
+        if file.patch is None or file_extension(file.filename) not in CODE_EXTENSIONS:
             return []
-        added_lines = get_added_lines(file.patch)
 
-        for pattern in DANGEROUS_PATTERNS:
-            for match in pattern["regex"].finditer(added_lines):
-                line = extract_line_numbers(file.patch, match.start())
-                suggestions.append(Suggestion(
-                    filename= file.filename,
-                    severity=pattern["severity"],
-                    category=pattern["category"],
-                    title=pattern["title"],
-                    description=pattern["description"],
-                    line=line,
-                    source="security"
-                ))
+        suggestions = []
+        for line_no, text in iter_added_lines(file.patch):
+            if is_comment(text):
+                continue
+            for pattern in DANGEROUS_PATTERNS:
+                if pattern["regex"].search(text):
+                    suggestions.append(self._suggestion(file, pattern, line_no))
 
         return suggestions
-        
+
+    @staticmethod
+    def _suggestion(file: FileChange, pattern: dict, line_no: int) -> Suggestion:
+        return Suggestion(
+            filename=file.filename,
+            severity=pattern["severity"],
+            category=pattern["category"],
+            title=pattern["title"],
+            description=pattern["description"],
+            line=line_no,
+            source="security",
+        )
