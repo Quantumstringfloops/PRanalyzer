@@ -53,8 +53,12 @@ class AnalysisResult:
     pr: PRSummary                  # title, author, repo, branch info
     suggestions: list[Suggestion]  # everything found across all analyzers
     score: QualityScore            # overall grade, dimension breakdown
-    passed: bool                   # False if blocking issues found
-    analysis_duration_seconds: float
-    llm_provider_used: str | None
-    duration: float
+    duration: float = 0.0          # seconds the analysis took
+    llm_provider_used: str | None = None
+    warnings: list[str] = field(default_factory=list)   # checks that were skipped or failed
+
+    @property
+    def passed(self) -> bool:
+        # False if blocking issues found
+        return self.score.passed
 
