@@ -1,14 +1,19 @@
-import re
 import os
-from tree_sitter import Language, Parser
-import tree_sitter_python as tspython
-import tree_sitter_typescript as tstypescript
-import tree_sitter_javascript as tsjavascript
-from pr_analyzer.models import FileChange, Suggestion
+import re
+from bisect import bisect_left
+from collections.abc import Iterator
+from functools import lru_cache
 
 import structlog
-log = structlog.get_logger(__name__)
+import tree_sitter_javascript as tsjavascript
+import tree_sitter_python as tspython
+import tree_sitter_typescript as tstypescript
+from tree_sitter import Language, Node, Parser
 
+from pr_analyzer.diff import iter_added_lines
+from pr_analyzer.models import FileChange, Suggestion
+
+log = structlog.get_logger(__name__)
 
 
 # for the treesitter
@@ -16,15 +21,31 @@ log = structlog.get_logger(__name__)
 LANGUAGE_MAP = {
     ".py":  "python",
     ".js":  "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
     ".ts":  "typescript",
     ".tsx": "tsx",
-    ".jsx": "javascript",
 }
 
+PYTHON = {".py"}
+JS_TS = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"}
+# style rules only make sense in source code, not in docs, lockfiles or data files
+CODE_EXTENSIONS = PYTHON | JS_TS | {
+    ".java", ".go", ".rb", ".php", ".cs", ".rs", ".kt", ".swift",
+    ".c", ".h", ".cc", ".cpp", ".hpp", ".scala", ".sh",
+}
+COMMENT_PREFIXES = ("#", "//", "/*", "*")
+
+# Each rule runs on one added line at a time (the text after the leading "+").
+# Hardcoded secrets are not checked here: the security scanner owns them, and checking them in
+# both places used to penalise the same line twice.
 PATTERNS = [
     {
         "id": "TODO",
-        "regex": re.compile(r"^\+(?!\+\+).*\b(TODO|FIXME)\b", re.MULTILINE),
+        "regex": re.compile(r"\b(TODO|FIXME)\b"),
+        "extensions": CODE_EXTENSIONS,
+        "skip_comments": False,
         "severity": "LOW",
         "category": "style",
         "title": "TODO/FIXME comment added",
@@ -34,7 +55,9 @@ PATTERNS = [
     },
     {
         "id": "CONSOLE_LOG",
-        "regex": re.compile(r"^\+(?!\+\+).*\bconsole\.log\s*\(", re.MULTILINE),
+        "regex": re.compile(r"\bconsole\.log\s*\("),
+        "extensions": JS_TS,
+        "skip_comments": True,
         "severity": "LOW",
         "category": "style",
         "title": "console.log left in code",
@@ -44,7 +67,9 @@ PATTERNS = [
     },
     {
         "id": "PRINT_STATEMENT",
-        "regex": re.compile(r"^\+(?!\+\+).*\bprint\s*\(", re.MULTILINE),
+        "regex": re.compile(r"(?<![\w.])print\s*\("),
+        "extensions": PYTHON,
+        "skip_comments": True,
         "severity": "LOW",
         "category": "style",
         "title": "print() left in code",
@@ -54,7 +79,9 @@ PATTERNS = [
     },
     {
         "id": "BARE_EXCEPT",
-        "regex": re.compile(r"^\+(?!\+\+)\s*except\s*:\s*$", re.MULTILINE),
+        "regex": re.compile(r"^\s*except\s*:"),
+        "extensions": PYTHON,
+        "skip_comments": True,
         "severity": "MEDIUM",
         "category": "security",
         "title": "Bare except clause",
@@ -65,7 +92,9 @@ PATTERNS = [
     },
     {
         "id": "LONG_LINE",
-        "regex": re.compile(r"^\+(?!\+\+).{121,}$", re.MULTILINE),
+        "regex": re.compile(r"^.{121,}$"),
+        "extensions": CODE_EXTENSIONS,
+        "skip_comments": False,
         "severity": "LOW",
         "category": "style",
         "title": "Line exceeds 120 characters",
@@ -73,26 +102,13 @@ PATTERNS = [
                         "readability. Consider breaking it up.",
     },
     {
-        "id": "HARDCODED_SECRET",
-        "regex": re.compile(
-            r"^\+(?!\+\+).*\b(password|passwd|secret|api[_-]?key)\s*=\s*"
-            r"['\"][^'\"]{3,}['\"]",
-            re.MULTILINE | re.IGNORECASE,
-        ),
-        "severity": "CRITICAL",
-        "category": "security",
-        "title": "Possible hardcoded credential",
-        "description": "This line assigns what looks like a secret "
-                        "(password/API key) directly as a string literal. "
-                        "Secrets should come from environment variables or "
-                        "a secrets manager, never committed to source.",
-    },
-    {
         "id": "MAGIC_NUMBER",
-        "regex": re.compile(
-            r"^\+(?!\+\+).*[^\w.](?<!0x)\b(?!0\b|1\b)\d{2,}\b",
-            re.MULTILINE,
-        ),
+        "regex": re.compile(r"[^\w.](?<!0x)\b(?!0\b|1\b)\d{2,}\b"),
+        "extensions": CODE_EXTENSIONS,
+        "skip_comments": True,
+        "skip_tests": True,
+        # defining a named constant is the fix this rule asks for, so don't flag it
+        "skip_if": re.compile(r"^\s*[A-Z][A-Z0-9_]*\s*(:[^=]*)?="),
         "severity": "LOW",
         "category": "style",
         "title": "Possible magic number",
@@ -102,73 +118,127 @@ PATTERNS = [
     },
     {
         "id": "MISSING_TYPE_HINT",
-        "regex": re.compile(
-            r"^\+(?!\+\+)\s*def\s+\w+\([^)]*\)\s*:",
-            re.MULTILINE,
-        ),
+        "regex": re.compile(r"^\s*(async\s+)?def\s+\w+\s*\([^)]*\)\s*:"),
+        "extensions": PYTHON,
+        "skip_comments": True,
         "severity": "LOW",
         "category": "style",
         "title": "Function missing return type hint",
         "description": "This function definition has no '->' return type "
                         "annotation. Note: this pattern alone can't check "
-                        "parameter hints or confirm '->' isn't present "
-                        "elsewhere on a wrapped signature — treat it as a "
-                        "rough signal, not a guarantee.",
+                        "parameter hints, and signatures that wrap over "
+                        "several lines are not checked.",
     },
 ]
 
-def extract_line_numbers(patch: str, match_position:int) -> int|None:
-    hunk_pattern = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-    current_line = None
-    current_hunk_start_pos = None
+# McCabe complexity = 1 + the number of decision points in a function
+FUNCTION_NODES = {
+    "python": {"function_definition"},
+    "javascript": {
+        "function_declaration", "function_expression", "arrow_function",
+        "method_definition", "generator_function_declaration", "generator_function",
+    },
+}
+DECISION_NODES = {
+    "python": {
+        "if_statement", "elif_clause", "for_statement", "while_statement", "except_clause",
+        "case_clause", "conditional_expression", "boolean_operator", "for_in_clause", "if_clause",
+    },
+    "javascript": {
+        "if_statement", "for_statement", "for_in_statement", "while_statement", "do_statement",
+        "switch_case", "catch_clause", "ternary_expression",
+    },
+}
+for _name in ("typescript", "tsx"):
+    FUNCTION_NODES[_name] = FUNCTION_NODES["javascript"]
+    DECISION_NODES[_name] = DECISION_NODES["javascript"]
+# in JS/TS, && || ?? are binary_expression nodes, told apart by their operator
+LOGICAL_OPERATORS = {"&&", "||", "??"}
 
-    for hunk_match in hunk_pattern.finditer(patch):
-        if hunk_match.start() <= match_position:
-            current_line = int(hunk_match.group(1))
-            current_hunk_start_pos = hunk_match.end()
-        else:
-            break
+COMPLEXITY_MEDIUM = 15
+COMPLEXITY_HIGH = 30
+MAX_FILE_LINES = 500
 
-    if current_line is None:
-        return None
 
-    chunk = patch[current_hunk_start_pos:match_position]
+def file_extension(filename: str) -> str:
+    return os.path.splitext(filename)[1].lower()
 
-    for line in chunk.splitlines():
-        if line.startswith("-"):
-            continue          # removed line — doesn't exist in new file
-        current_line += 1     # added (+) and context lines both count
 
-    return current_line
+def is_comment(text: str) -> bool:
+    return text.lstrip().startswith(COMMENT_PREFIXES)
 
-import ctypes
 
-def get_language(filename: str):
-    ext = os.path.splitext(filename)[1]
-    language = LANGUAGE_MAP.get(ext)
-    if language is None:
-        return None
-    if language == "python":
+def is_test_file(filename: str) -> bool:
+    parts = filename.replace("\\", "/").lower().split("/")
+    name = parts[-1]
+    return (
+        any(part in ("test", "tests", "__tests__", "spec") for part in parts[:-1])
+        or name.startswith("test_")
+        or re.search(r"(_test\.py|\.(test|spec)\.[cm]?[jt]sx?)$", name) is not None
+    )
+
+
+def language_name(filename: str) -> str | None:
+    return LANGUAGE_MAP.get(file_extension(filename))
+
+
+@lru_cache(maxsize=None)
+def _load_language(name: str) -> Language:
+    if name == "python":
         return Language(tspython.language())
-    if language == "javascript":
-        return Language(tsjavascript.language()).value
-    if language == "tsx":
-        return Language(tstypescript.language_tsx())
-    if language == "typescript":
+    if name == "javascript":
+        return Language(tsjavascript.language())
+    if name == "typescript":
         return Language(tstypescript.language_typescript())
+    if name == "tsx":
+        return Language(tstypescript.language_tsx())
+    raise ValueError(f"no tree-sitter grammar for {name!r}")
 
 
-def count_complexity(node) -> int:
-    # count decision nodes if elif else where except case for
+def get_language(filename: str) -> Language | None:
+    name = language_name(filename)
+    return _load_language(name) if name else None
+
+
+def count_complexity(node: Node, language: str = "python") -> int:
+    """Count decision points under `node`. Nested functions are skipped: they are measured
+    on their own. Walks iteratively, so deeply nested code can't hit the recursion limit."""
+    decisions = DECISION_NODES[language]
+    functions = FUNCTION_NODES[language]
     count = 0
-    NAMED_NODES =["if_statement", "for_statement", "while_statement", "with_statement", "except_clause", "cause_clause"]
-
-    if node.type in NAMED_NODES:
-        count += 1
-    for child in node.children:
-        count += count_complexity(child)
-
+    stack = list(node.children)
+    while stack:
+        current = stack.pop()
+        if current.type in functions:
+            continue
+        if current.type in decisions:
+            count += 1
+        elif current.type == "binary_expression":
+            operator = current.child_by_field_name("operator")
+            if operator is not None and operator.type in LOGICAL_OPERATORS:
+                count += 1
+        stack.extend(current.children)
     return count
+
+
+def iter_functions(root: Node, language: str) -> Iterator[Node]:
+    functions = FUNCTION_NODES[language]
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type in functions:
+            yield node
+        stack.extend(node.children)
+
+
+def function_name(node: Node) -> str:
+    name = node.child_by_field_name("name")
+    if name is None and node.parent is not None and node.parent.type == "variable_declarator":
+        name = node.parent.child_by_field_name("name")   # const handler = () => {...}
+    if name is None or name.text is None:
+        return "<anonymous>"
+    return name.text.decode("utf-8", errors="replace")
+
 
 class StaticAnalyzer:
 
@@ -185,71 +255,92 @@ class StaticAnalyzer:
         log.info("static analysis complete", total_suggestions=len(suggestions))
         return suggestions
 
-    def scan_patterns(self, file:FileChange) -> list[Suggestion]:
+    def scan_patterns(self, file: FileChange) -> list[Suggestion]:
+        if file.patch is None:
+            return []
+        extension = file_extension(file.filename)
+        test_file = is_test_file(file.filename)
+
         suggestions = []
-        for pattern in PATTERNS:
-            for match in pattern["regex"].finditer(file.patch):
-                line = extract_line_numbers(file.patch, match.start())
-                suggestions.append(Suggestion(
-                filename=file.filename,
-                severity=pattern["severity"],
-                category=pattern["category"],
-                title=pattern["title"],
-                description=pattern["description"],
-                line=line,
-                source="static"
-            ))
+        for line_no, text in iter_added_lines(file.patch):
+            comment = is_comment(text)
+            for pattern in PATTERNS:
+                if extension not in pattern["extensions"]:
+                    continue
+                if comment and pattern["skip_comments"]:
+                    continue
+                if test_file and pattern.get("skip_tests"):
+                    continue
+                skip_if = pattern.get("skip_if")
+                if skip_if is not None and skip_if.search(text):
+                    continue
+                if pattern["regex"].search(text):
+                    suggestions.append(Suggestion(
+                        filename=file.filename,
+                        severity=pattern["severity"],
+                        category=pattern["category"],
+                        title=pattern["title"],
+                        description=pattern["description"],
+                        line=line_no,
+                        source="static",
+                    ))
         return suggestions
 
-
-    def scan_tree_sitter(self, file:FileChange)->list[Suggestion]:
-        suggestions = []
+    def scan_tree_sitter(self, file: FileChange) -> list[Suggestion]:
         if file.raw_content is None:
             return []
-        lang = get_language(file.filename)
-
-        if lang is None:
+        language = language_name(file.filename)
+        if language is None:
             return []
-        
 
-        parser = Parser(lang)
-        source = bytes(file.raw_content, "utf-8")
-        tree = parser.parse(source)
-
-        complexity = count_complexity(tree.root_node)
-        if complexity > 20:
-            suggestions.append(Suggestion(
-                filename = file.filename,
-                severity="MEDUIM",
-                category="complexity",
-                title = "High cyclomatic complexity",
-                description=f"This file has a complexity score of {complexity}. Consider breaking it into smaller functions.",
-                line = None,
-                source="static"
-            ))
-
-        elif complexity > 30:
-            suggestions.append(Suggestion(
-                filename = file.filename,
-                severity="HIGH",
-                category="complexity",
-                title = "Very high cyclomatic complexity",
-                description=f"This file has a complexity score of {complexity}. Consider breaking it into smaller functions.",
-                line = None,
-                source="static"
-            ))
+        suggestions = []
+        try:
+            tree = Parser(_load_language(language)).parse(file.raw_content.encode("utf-8"))
+            suggestions.extend(self._complex_functions(file, tree.root_node, language))
+        except Exception as e:  # a parser problem must not stop the rest of the analysis
+            log.warning("tree_sitter_failed", filename=file.filename, error=str(e))
 
         lines = len(file.raw_content.splitlines())
-        if lines > 500:
+        if lines > MAX_FILE_LINES:
             suggestions.append(Suggestion(
-            filename=file.filename,
-            severity="LOW",
-            category="complexity",
-            title="File too long",
-            description=f"This file has {lines} lines. Consider splitting it into smaller modules.",
-            line=None,
-            source="static"
-        ))
+                filename=file.filename,
+                severity="LOW",
+                category="complexity",
+                title="File too long",
+                description=f"This file has {lines} lines. Consider splitting it into smaller modules.",
+                line=None,
+                source="static",
+            ))
 
         return suggestions
-    
+
+    def _complex_functions(self, file: FileChange, root: Node, language: str) -> list[Suggestion]:
+        # only report functions this PR touches; untouched legacy code isn't the PR's fault
+        added = sorted(line_no for line_no, _ in iter_added_lines(file.patch or ""))
+        suggestions = []
+        for function in iter_functions(root, language):
+            start, end = function.start_point[0] + 1, function.end_point[0] + 1
+            i = bisect_left(added, start)
+            if i == len(added) or added[i] > end:
+                continue
+
+            complexity = 1 + count_complexity(function, language)
+            if complexity > COMPLEXITY_HIGH:
+                severity, title, limit = "HIGH", "Very high cyclomatic complexity", COMPLEXITY_HIGH
+            elif complexity > COMPLEXITY_MEDIUM:
+                severity, title, limit = "MEDIUM", "High cyclomatic complexity", COMPLEXITY_MEDIUM
+            else:
+                continue
+
+            suggestions.append(Suggestion(
+                filename=file.filename,
+                severity=severity,
+                category="complexity",
+                title=title,
+                description=f"`{function_name(function)}` has a cyclomatic complexity of "
+                            f"{complexity} (above {limit}). Consider breaking it into "
+                            f"smaller functions.",
+                line=start,
+                source="static",
+            ))
+        return suggestions
