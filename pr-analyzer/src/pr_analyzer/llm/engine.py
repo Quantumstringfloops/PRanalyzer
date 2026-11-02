@@ -127,7 +127,8 @@ class LLMEngine:
         if response.stop_reason == "max_tokens":
             log.warning("llm_output_truncated", hint="raise LLM_MAX_TOKENS")
         return "".join(
-            block.text for block in response.content if getattr(block, "type", None) == "text"
+            getattr(block, "text", "") for block in response.content
+            if getattr(block, "type", None) == "text"
         )
 
     def call_ollama(self, prompt: str) -> str:

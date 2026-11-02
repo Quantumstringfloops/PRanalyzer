@@ -1,4 +1,5 @@
 import re
+from typing import Any
 
 import structlog
 
@@ -12,7 +13,7 @@ log = structlog.get_logger(__name__)
 
 # Every pattern runs on one added line at a time, so a match can't span lines and its line
 # number is exact. Secrets are checked in every file, comments included.
-SECRET_PATTERNS = [
+SECRET_PATTERNS: list[dict[str, Any]] = [
     {
         "id": "aws_access_key",
         "regex": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
@@ -77,7 +78,7 @@ SECRET_PATTERNS = [
 ]
 
 # Checked only in source files, and never on comment lines.
-DANGEROUS_PATTERNS = [
+DANGEROUS_PATTERNS: list[dict[str, Any]] = [
     {
         "id": "sql_injection",
         # an f-string, or a string literal followed by %, .format( or + ; parameterised calls such

@@ -48,7 +48,7 @@ class SemgrepRunner:
                 destination = os.path.join(workdir, relative)
                 os.makedirs(os.path.dirname(destination), exist_ok=True)
                 with open(destination, "w", encoding="utf-8") as handle:
-                    handle.write(file.raw_content)
+                    handle.write(file.raw_content or "")
                 files_by_path[relative] = file
 
             if not files_by_path:
@@ -123,9 +123,11 @@ class SemgrepRunner:
 
             region = location.get("region") or {}
             start = region.get("startLine")
-            end = region.get("endLine") or start
-            if start is None:
+            if not isinstance(start, int):
                 continue
+            end = region.get("endLine")
+            if not isinstance(end, int):
+                end = start
             # report only what the PR added; issues already in the file aren't this PR's doing
             if file.filename not in added_lines:
                 added_lines[file.filename] = {n for n, _ in iter_added_lines(file.patch or "")}

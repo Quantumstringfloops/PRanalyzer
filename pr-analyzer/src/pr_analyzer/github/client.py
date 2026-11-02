@@ -4,6 +4,8 @@ from urllib.parse import urlsplit
 import requests
 import structlog
 from github import Auth, Github, GithubException, RateLimitExceededException
+from github.GithubObject import NotSet
+from github.PullRequest import ReviewComment
 from urllib3.util.retry import Retry
 
 from pr_analyzer.config import settings
@@ -154,7 +156,7 @@ class GithubClient:
         if not self.token:
             raise InvalidTokenError("--post-review needs a GITHUB_TOKEN that can write pull requests")
 
-        review_comments = [
+        review_comments: list[ReviewComment] = [
             {
                 "path": suggestion.filename,
                 "line": line,
@@ -168,9 +170,9 @@ class GithubClient:
             repo = self.git_instance.get_repo(pr.repo)
             pull = repo.get_pull(pr.number)
             # pin the review to the analysed commit so line numbers match even if the PR moved on
-            extra = {"commit": repo.get_commit(pr.head_sha)} if pr.head_sha else {}
+            commit = repo.get_commit(pr.head_sha) if pr.head_sha else NotSet
             try:
-                pull.create_review(body=body, event="COMMENT", comments=review_comments, **extra)
+                pull.create_review(commit=commit, body=body, event="COMMENT", comments=review_comments)
             except GithubException as e:
                 if e.status != 422 or not review_comments:
                     raise
@@ -178,9 +180,9 @@ class GithubClient:
                 # post the summary alone rather than nothing
                 log.warning("inline_comments_rejected", error=str(e.data))
                 pull.create_review(
+                    commit=commit,
                     body=body + "\n\n_Inline comments could not be attached to this diff._",
                     event="COMMENT",
-                    **extra,
                 )
                 review_comments = []
         except RateLimitExceededException as e:

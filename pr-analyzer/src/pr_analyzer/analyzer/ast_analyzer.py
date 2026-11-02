@@ -3,6 +3,7 @@ import re
 from bisect import bisect_left
 from collections.abc import Iterator
 from functools import lru_cache
+from typing import Any
 
 import structlog
 import tree_sitter_javascript as tsjavascript
@@ -40,7 +41,7 @@ COMMENT_PREFIXES = ("#", "//", "/*", "*")
 # Each rule runs on one added line at a time (the text after the leading "+").
 # Hardcoded secrets are not checked here: the security scanner owns them, and checking them in
 # both places used to penalise the same line twice.
-PATTERNS = [
+PATTERNS: list[dict[str, Any]] = [
     {
         "id": "TODO",
         "regex": re.compile(r"\b(TODO|FIXME)\b"),
