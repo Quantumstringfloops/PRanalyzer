@@ -14,7 +14,7 @@ import tree_sitter_typescript as tstypescript
 from tree_sitter import Language, Node, Parser
 
 from pr_analyzer.analyzer.line_lexer import LineParts, split_line
-from pr_analyzer.diff import iter_added_lines
+from pr_analyzer.diff import count_changes, iter_added_lines
 from pr_analyzer.models import FileChange, Suggestion
 
 log = structlog.get_logger(__name__)
@@ -390,20 +390,34 @@ class StaticAnalyzer:
             except Exception as e:  # a parser problem must not stop the rest of the analysis
                 log.warning("tree_sitter_failed", filename=file.filename, error=str(e))
 
-        lines = len(file.raw_content.splitlines())
-        if FILE_LENGTH_RULE not in disabled and lines > thresholds.max_file_lines:
-            suggestions.append(Suggestion(
-                filename=file.filename,
-                severity="LOW",
-                category="complexity",
-                title="File too long",
-                description=f"This file has {lines} lines. Consider splitting it into smaller modules.",
-                line=None,
-                source="static",
-                rule_id=FILE_LENGTH_RULE,
-            ))
-
+        if FILE_LENGTH_RULE not in disabled:
+            suggestions.extend(self._file_length(file, file.raw_content, thresholds.max_file_lines))
         return suggestions
+
+    @staticmethod
+    def _file_length(file: FileChange, content: str, limit: int) -> list[Suggestion]:
+        # Only when this PR is what takes the file past the limit: a file that was already long
+        # used to be reported on every PR that touched it, whatever the change.
+        lines = len(content.splitlines())
+        added, removed = count_changes(file.patch or "")
+        before = lines - added + removed
+        if lines <= limit or before > limit:
+            return []
+        if before <= 0:
+            grew = f"This new file has {lines} lines"
+        else:
+            grew = f"This change takes the file from {before} to {lines} lines"
+        return [Suggestion(
+            filename=file.filename,
+            severity="LOW",
+            category="complexity",
+            title="File too long",
+            description=f"{grew}, past the limit of {limit}. Consider splitting it into smaller "
+                        f"modules.",
+            line=None,
+            source="static",
+            rule_id=FILE_LENGTH_RULE,
+        )]
 
     def _complex_functions(
         self, file: FileChange, root: Node, language: str, thresholds: Thresholds

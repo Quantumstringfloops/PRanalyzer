@@ -48,7 +48,7 @@ Code review is slow, inconsistent, and easy to skip under deadline pressure. Jun
               └─────────────────┘  plus a GitHub review with inline comments (--post-review)
 ```
 
-Every check reports only lines the PR adds, so a PR is never blamed for code it didn't touch. The optional stages degrade instead of failing: if Semgrep or pip-audit isn't installed, or the LLM can't be reached, the run carries on and the report lists a warning.
+Every check reports only lines the PR adds, so a PR is never blamed for code it didn't touch: complexity is reported for the functions the PR changes, and file length only when the PR takes a file past the limit. The optional stages degrade instead of failing: if Semgrep or pip-audit isn't installed, or the LLM can't be reached, the run carries on and the report lists a warning.
 
 ---
 
@@ -163,7 +163,7 @@ inline_min_severity = "MEDIUM"
 [thresholds]
 complexity_medium = 15   # a function's cyclomatic complexity above this is MEDIUM...
 complexity_high = 30     # ...and above this, HIGH
-max_file_lines = 500     # longer files get a file-length finding
+max_file_lines = 500     # a PR that takes a file past this gets a file-length finding
 max_line_length = 120    # longer added lines get a long-line finding
 ```
 
@@ -193,7 +193,7 @@ Configuration error: .pr-analyzer.toml on main is invalid:
 | `magic-number` | unexplained number literal | LOW | source files, not tests |
 | `missing-return-type` | `def` without `->` | LOW | Python, not tests |
 | `complexity` | function above `complexity_medium` / `complexity_high` | MEDIUM / HIGH | Python, JavaScript, TypeScript |
-| `file-length` | file longer than `max_file_lines` | LOW | Python, JavaScript, TypeScript |
+| `file-length` | a file the PR takes past `max_file_lines` | LOW | Python, JavaScript, TypeScript |
 | `aws-access-key` | AWS access key id | CRITICAL | every file |
 | `hardcoded-api-key` | `api_key = "..."` and similar | CRITICAL | every file |
 | `private-key` | PEM private key block | CRITICAL | every file |

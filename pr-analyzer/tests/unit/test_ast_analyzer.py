@@ -271,6 +271,19 @@ def test_complexity_thresholds_are_configurable():
     assert "above 5" in medium.description
     assert high.severity == "HIGH"
 
+def test_file_already_too_long_is_not_blamed_on_the_pr():
+    # a long file used to be reported on every PR that touched it, whatever the change
+    code = "x = 1\n" * 30
+    file = make_file("@@ -30,0 +31,1 @@\n+y = 2", "app.py", code + "y = 2\n")
+    assert analyzer.analyze([file], thresholds=Thresholds(max_file_lines=10)) == []
+
+def test_pr_that_makes_a_file_too_long_is_told():
+    code = "x = 1\n" * 12
+    file = make_file("@@ -9,0 +10,3 @@\n+x = 1\n+x = 1\n+x = 1", "app.py", code)
+    [result] = analyzer.analyze([file], thresholds=Thresholds(max_file_lines=10))
+    assert result.rule_id == "file-length"
+    assert "from 9 to 12 lines, past the limit of 10" in result.description
+
 def test_file_length_limit_is_configurable():
     file = added_file("x = 1\n" * 20)
     assert analyzer.analyze([file]) == []
