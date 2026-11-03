@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# the Python project lives in pr-analyzer/, not at the repository root
+defaults:
+  run:
+    working-directory: pr-analyzer
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    # actions are pinned to commits, since a tag can be moved to different code; the comment
+    # names the release
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Poetry
+        run: pip install "poetry>=2,<3"
+
+      - name: Check poetry.lock matches pyproject.toml
+        run: poetry check --lock
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --all-extras
+
+      - name: Run ruff
+        run: poetry run ruff check src tests
+
+      - name: Run mypy
+        run: poetry run mypy src --ignore-missing-imports
+
+      - name: Run tests
+        run: poetry run pytest --tb=short
