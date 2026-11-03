@@ -268,6 +268,10 @@ def test_a_long_generated_line_is_checked_quickly():
     assert time.perf_counter() - start < 1
     assert rules == ["long-line"]
 
+def test_a_number_thousands_of_digits_long_does_not_crash():
+    # int() refuses more than 4,300 digits: the ValueError stopped the whole analysis
+    assert "magic-number" in rules_for("x = (" + "7" * 5000 + ")")
+
 def test_numbers_far_into_a_long_line_are_still_explained():
     padding = "x = 1; " * 40
     assert "magic-number" not in rules_for(padding + "fetch(url, timeout=37)")

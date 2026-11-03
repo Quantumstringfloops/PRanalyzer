@@ -48,6 +48,8 @@ WELL_KNOWN_NUMBERS = frozenset({
     255, 65535,                                     # the largest 8- and 16-bit values
     80, 443,                                        # the HTTP and HTTPS ports
 }) | {int(status) for status in HTTPStatus}        # standard HTTP status codes, 100 to 511
+# int() refuses a literal of thousands of digits, and no well-known number is that long
+WELL_KNOWN_DIGITS = len(str(max(WELL_KNOWN_NUMBERS)))
 # `timeout=30`, `retries = 5`, `"port": 8080`, `{ port: 8080 }`: the name right before the number
 # says what it means. Comparisons (==, <=, ...) and augmented assignments (+=) don't name it.
 NAMED_BY = re.compile(r"(?:\b[A-Za-z_]\w*|[\"'\]])\s*(?::|(?<![=!<>+\-*/%&|^~:@])=)\s*[-+]?$")
@@ -69,9 +71,9 @@ def in_subscript(code: str, pos: int) -> bool:
 
 def explained_number(code: str, match: re.Match[str]) -> bool:
     """A number a reader understands without a named constant."""
-    start = match.start()
+    digits, start = match.group(), match.start()
     return (
-        int(match.group()) in WELL_KNOWN_NUMBERS
+        (len(digits) <= WELL_KNOWN_DIGITS and int(digits) in WELL_KNOWN_NUMBERS)
         or NAMED_BY.search(code, max(0, start - NUMBER_CONTEXT), start) is not None
         or in_subscript(code, start)
     )
