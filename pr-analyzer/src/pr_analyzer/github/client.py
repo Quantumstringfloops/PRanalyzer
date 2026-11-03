@@ -1,5 +1,5 @@
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -22,7 +22,12 @@ from pr_analyzer.exceptions import (
     RepositoryNotFoundError,
 )
 from pr_analyzer.github.markdown import neutralise, neutralise_line
-from pr_analyzer.github.ratelimit import RateLimitPause, github_retry
+from pr_analyzer.github.ratelimit import (
+    RateLimitExceeded,
+    RateLimitPause,
+    RateLimitRetry,
+    github_retry,
+)
 from pr_analyzer.models import FileChange, PRSummary, Suggestion
 
 log = structlog.get_logger(__name__)
@@ -53,11 +58,11 @@ class GithubClient:
         self.auth = Auth.Token(self.token) if self.token else None
         self.git_instance = self._new_github()
 
-    def _new_github(self, lazy: bool = False) -> Github:
+    def _new_github(self, lazy: bool = False, retry: RateLimitRetry | None = None) -> Github:
         return Github(
             auth=self.auth,
             timeout=settings.github_timeout_seconds,
-            retry=self.retry,
+            retry=retry if retry is not None else self.retry,
             per_page=PER_PAGE,
             lazy=lazy,
         )
@@ -165,10 +170,16 @@ class GithubClient:
         self, repo, files: list[tuple[str, str | None]], ref: str
     ) -> list[str | None]:
         """The text at `ref` of each (path, blob SHA) in `files`, in order (None where it isn't
-        available), from the cache or fetched GITHUB_MAX_WORKERS at a time."""
+        available), from the cache or fetched GITHUB_MAX_WORKERS at a time.
+
+        The first failure, or Ctrl-C, ends a parallel fetch at once: the files still queued
+        aren't fetched, and the requests in flight stop waiting and aren't sent again."""
         repo_name = repo.full_name
         if len(files) < 2 or self.max_workers < 2:
-            return [self._cached_content(repo, repo_name, file, ref) for file in files]
+            # on the main thread, which Ctrl-C reaches itself
+            return [
+                self._cached_content(repo, repo_name, file, ref, self.retry.pause) for file in files
+            ]
 
         # PyGithub's Requester isn't thread-safe: it keeps one connection object per client, and
         # that object holds each request's verb, URL and headers in attributes between request()
@@ -176,6 +187,10 @@ class GithubClient:
         # sharing a client can send each other's requests. Each worker thread gets a client of
         # its own instead: its own Requester, connection and requests.Session. What the threads
         # share (the token, the retry policy and the cache) holds no per-request state.
+        # Their rate-limit waits hold back the run's other requests as usual, but this fetch can
+        # cancel them: Ctrl-C reaches only the main thread.
+        pause = self.retry.pause.scope()
+        retry = self.retry.new(pause=pause)
         local = threading.local()
         clients: list[Github] = []
         lock = threading.Lock()
@@ -183,25 +198,39 @@ class GithubClient:
         def fetch(file: tuple[str, str | None]) -> str | None:
             thread_repo = getattr(local, "repo", None)
             if thread_repo is None:
-                client = self._new_github(lazy=True)   # lazy: no request until get_contents
-                with lock:
+                with lock:   # once the clients are being closed, no new one is made
+                    pause.raise_if_cancelled()
+                    client = self._new_github(lazy=True, retry=retry)   # lazy: no request yet
                     clients.append(client)
                 thread_repo = local.repo = client.get_repo(repo_name)
-            return self._cached_content(thread_repo, repo_name, file, ref)
+            return self._cached_content(thread_repo, repo_name, file, ref, pause)
 
         pool = ThreadPoolExecutor(
             max_workers=min(self.max_workers, len(files)), thread_name_prefix="github-contents"
         )
         try:
-            return list(pool.map(fetch, files))
+            futures = [pool.submit(fetch, file) for file in files]
+            # a failure is raised as soon as it happens, not once the files before it are in
+            wait(futures, return_when=FIRST_EXCEPTION)
+            errors = [e for f in futures if f.done() and (e := f.exception()) is not None]
+            if errors:
+                raise errors[0]
+            contents = [future.result() for future in futures]
+        except BaseException:
+            # Ctrl-C or a failure: the waits in flight end and nothing is sent again, the fetches
+            # still queued are dropped, and the ones in flight aren't waited for
+            pause.cancel()
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
         finally:
-            # after a failure, the fetches still queued are dropped rather than sent
-            pool.shutdown(wait=True, cancel_futures=True)
-            for client in clients:
-                client.close()
+            with lock:
+                for client in clients:
+                    client.close()
+        pool.shutdown()   # every fetch is done: the workers are idle
+        return contents
 
     def _cached_content(
-        self, repo, repo_name: str, file: tuple[str, str | None], ref: str
+        self, repo, repo_name: str, file: tuple[str, str | None], ref: str, pause: RateLimitPause
     ) -> str | None:
         # the text of a blob never changes, and neither does a path's at a commit
         path, blob = file
@@ -211,7 +240,7 @@ class GithubClient:
         if text is not None:
             return text
 
-        self.retry.pause.wait_if_paused()   # while a request waits out a rate limit, hold back
+        pause.wait_if_paused()   # while a request waits out a rate limit, hold back
         text, sha = self._fetch_content(repo, path, ref)
         # the PR may have moved on since its files were listed; a blob's key gets only its text
         if text is not None and (blob is None or sha == blob):
@@ -316,6 +345,9 @@ class GithubClient:
             try:
                 review.edit(summary)
                 return True
+            except RateLimitExceededException:
+                # a 403 too, but not "someone else's review": posting a new one would duplicate it
+                raise
             except GithubException as e:
                 if e.status not in (403, 404):
                     raise
@@ -353,6 +385,10 @@ class GithubClient:
 
     @staticmethod
     def _reset_time(e: RateLimitExceededException) -> datetime:
+        if isinstance(e, RateLimitExceeded):
+            # the retry policy worked it out, from an HTTP date or GitHub's minute for a limit
+            # named only in the message too (x-ratelimit-reset is the hourly limit's)
+            return datetime.fromtimestamp(e.retry_at)
         headers = {k.lower(): v for k, v in (e.headers or {}).items()}
         try:
             if "retry-after" in headers:  # secondary rate limits say how long to wait
