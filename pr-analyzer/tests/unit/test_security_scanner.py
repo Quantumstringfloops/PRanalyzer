@@ -174,6 +174,22 @@ def test_js_comment_after_code_is_not_flagged():
 def test_a_call_after_a_string_is_still_flagged():
     assert titles(make_file(added('x = "a"; eval(y)'))) == ["eval() usage detected"]  # pr-analyzer: ignore
 
+@pytest.mark.parametrize("code, filename, rule", [
+    ('otp = f"{random.randint(0, 999999):06d}"', "auth.py", "insecure-random"),  # pr-analyzer: ignore
+    ('print(f"= {eval(expr)}")', "calc.py", "eval"),  # pr-analyzer: ignore
+    ('log.info(f"{pickle.loads(blob)!r}")', "cache.py", "pickle-load"),  # pr-analyzer: ignore
+    ('data = f"{yaml.load(raw)}"', "cfg.py", "yaml-load"),  # pr-analyzer: ignore
+    ('msg = f"{subprocess.run(cmd, shell=True).stdout}"', "run.py", "subprocess-shell"),  # pr-analyzer: ignore
+    ("const out = `${eval(expr)}`;", "view.ts", "eval"),  # pr-analyzer: ignore
+])
+def test_calls_in_fstring_and_template_fields_are_flagged(code, filename, rule):
+    # the code in {...} and ${...} used to be blanked with the rest of the string
+    file = make_file(added(code), filename=filename)
+    assert rule in [s.rule_id for s in scanner.scan([file])]
+
+def test_calls_in_the_text_of_an_fstring_are_not_flagged():
+    assert scanner.scan([make_file(added('hint = f"never eval({name}) twice"'))]) == []  # pr-analyzer: ignore
+
 def test_secrets_are_still_found_in_comments():
     file = make_file(added('x = 1  # password = "hunter22"'))  # pr-analyzer: ignore
     assert titles(file) == ["Hardcoded password"]
@@ -181,6 +197,21 @@ def test_secrets_are_still_found_in_comments():
 def test_sql_string_with_inner_quotes_is_still_flagged():
     code = "cur.execute(\"SELECT * FROM t WHERE name = '%s'\" % name)"  # pr-analyzer: ignore
     assert "Possible SQL injection" in titles(make_file(added(code)))
+
+def test_a_character_literal_does_not_hide_the_rest_of_the_line():
+    # '"' used to open a string that ran to the end of the line
+    code = "if (c == '\"') stmt.execute(\"SELECT * FROM t WHERE id=\" + id);"  # pr-analyzer: ignore
+    assert titles(make_file(added(code), filename="Lexer.java")) == ["Possible SQL injection"]
+
+def test_php_hash_comment_is_not_a_call():
+    # a # comment used to be read as code in PHP, so this blocked the run with a HIGH finding
+    file = make_file(added("# never eval($input) here"), filename="index.php")  # pr-analyzer: ignore
+    assert scanner.scan([file]) == []
+
+def test_php_url_in_single_quotes_does_not_hide_a_call():
+    # the // in the URL used to start a comment that hid the rest of the line
+    code = "$x = file_get_contents('http://a'); eval($x);"  # pr-analyzer: ignore
+    assert titles(make_file(added(code), filename="index.php")) == ["eval() usage detected"]
 
 def test_dangerous_patterns_only_in_source_files():
     docs = make_file(added("Never call eval(input) on user data."), filename="README.md")  # pr-analyzer: ignore

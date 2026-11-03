@@ -82,8 +82,9 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
 ]
 
 # Checked only in source files, and only on code: a call named in a comment or written inside a
-# string literal isn't a call. String quotes stay visible (see line_lexer), so the SQL rule still
-# sees a string being formatted into a query.
+# string literal isn't a call, though one in an f-string's {...} or a template literal's ${...}
+# is. String quotes stay visible (see line_lexer), so the SQL rule still sees a string being
+# formatted into a query.
 DANGEROUS_PATTERNS: list[dict[str, Any]] = [
     {
         "id": "sql-injection",
