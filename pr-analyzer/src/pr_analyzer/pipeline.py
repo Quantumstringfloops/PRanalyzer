@@ -12,6 +12,7 @@ from pr_analyzer.github.client import GithubClient
 from pr_analyzer.llm.engine import LLMEngine
 from pr_analyzer.models import AnalysisResult, Suggestion
 from pr_analyzer.security.scanner import SecurityScanner
+from pr_analyzer.suppression import ignored_warning, split_ignored
 
 log = structlog.get_logger(__name__)
 
@@ -57,7 +58,8 @@ class AnalysisPipeline:
         security_analysis = self.security.scan(pr.files)
         warnings.extend(self.security.warnings)
 
-        existing_findings = static_analysis + security_analysis
+        # findings on lines marked `pr-analyzer: ignore` are dropped and named in a warning
+        existing_findings, ignored = split_ignored(static_analysis + security_analysis, pr.files)
 
         llm_suggestions: list[Suggestion] = []
         llm_provider_used = None
@@ -73,7 +75,12 @@ class AnalysisPipeline:
                 warnings.append(f"LLM review skipped: {e}")
             log.info("LLM analysis done", count=len(llm_suggestions))
 
-        all_suggestions = static_analysis + security_analysis + llm_suggestions
+        llm_suggestions, ignored_llm = split_ignored(llm_suggestions, pr.files)
+        ignored += ignored_llm
+        if ignored:
+            warnings.append(ignored_warning(ignored))
+
+        all_suggestions = existing_findings + llm_suggestions
 
         log.info("Scoring: ")
         score = self.scorer.score(all_suggestions)

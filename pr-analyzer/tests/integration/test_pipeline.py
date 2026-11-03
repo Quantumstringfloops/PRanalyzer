@@ -32,7 +32,7 @@ def make_pr(patch_text="@@ -1,1 +1,1 @@\n+x = 1"):
     )
 
 def make_insecure_pr():
-    return make_pr(patch_text='@@ -1,1 +1,1 @@\n+password = "secret123"')
+    return make_pr(patch_text='@@ -1,1 +1,1 @@\n+password = "secret123"')  # pr-analyzer: ignore
 
 def make_suggestion(line, severity="LOW", title="TODO"):
     return Suggestion(filename="auth.py", severity=severity, category="style",
@@ -147,6 +147,32 @@ def test_llm_failure_keeps_other_findings():
     assert [s.title for s in result.suggestions] == ["Hardcoded password"]
     assert "LLM review skipped: Could not reach Ollama" in result.warnings
     assert result.llm_provider_used is None
+
+# ── test: ignore markers ──────────────────────────────────────────────────────
+def test_marked_lines_are_ignored_and_reported():
+    marked = 'password = "secret123"  # pr-analyzer: ignore'
+    pr = make_pr(f"@@ -1,1 +1,2 @@\n x = 1\n+{marked}")
+    pr.files[0].raw_content = f"x = 1\n{marked}"
+    pipeline = AnalysisPipeline(skip_llm=True)
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=pr):
+        result = pipeline.run("https://github.com/neil/repo/pull/1")
+
+    assert result.suggestions == []
+    assert result.passed is True
+    assert "Ignored 1 finding(s) on lines marked 'pr-analyzer: ignore': auth.py:2" in result.warnings
+
+def test_llm_findings_on_marked_lines_are_ignored():
+    pr = make_pr("@@ -1,1 +1,1 @@\n+x = 1  # pr-analyzer: ignore")
+    pr.files[0].raw_content = "x = 1  # pr-analyzer: ignore"
+    pipeline = AnalysisPipeline()
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=pr):
+        with patch.object(pipeline.llm, "analyze", return_value=[make_suggestion(1, "MEDIUM")]):
+            result = pipeline.run("https://github.com/neil/repo/pull/1")
+
+    assert result.suggestions == []
+    assert any("auth.py:1" in w for w in result.warnings)
 
 def test_security_tool_warnings_reach_the_result():
     pipeline = AnalysisPipeline(skip_llm=True)

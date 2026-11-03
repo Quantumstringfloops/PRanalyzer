@@ -116,7 +116,7 @@ def test_missing_return_type_not_flagged_in_tests():
 
 def test_hardcoded_secret_left_to_security_scanner():
     # the static and security scanners both used to flag this, penalising it twice
-    file = make_file('@@ -0,0 +1,1 @@\n+password = "hunter22"', filename="app.py")
+    file = make_file('@@ -0,0 +1,1 @@\n+password = "hunter22"', filename="app.py")  # pr-analyzer: ignore
     assert analyzer.analyze([file]) == []
 
 # ── tree-sitter complexity ────────────────────────────────────────────────────

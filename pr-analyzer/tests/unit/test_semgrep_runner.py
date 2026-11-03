@@ -10,7 +10,7 @@ from pr_analyzer.security import semgrep_runner, tools
 from pr_analyzer.security.semgrep_runner import SemgrepRunner
 
 # app.py gains lines 2-3; line 5 was already there before the PR
-APP_PATCH = "@@ -1,3 +1,5 @@\n x = 1\n+eval(a)\n+print(a)\n y = 2\n eval(old)"
+APP_PATCH = "@@ -1,3 +1,5 @@\n x = 1\n+eval(a)\n+print(a)\n y = 2\n eval(old)"  # pr-analyzer: ignore
 
 def make_file(filename, patch=APP_PATCH, status="modified", content="x = 1\n"):
     return FileChange(filename=filename, status=status, additions=1, deletions=0,

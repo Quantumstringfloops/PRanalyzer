@@ -28,7 +28,7 @@ def make_pr() -> PRSummary:
                 status="modified",
                 additions=20,
                 deletions=5,
-                patch="@@ -1,1 +1,1 @@\n+password = 'abc123'",
+                patch="@@ -1,1 +1,1 @@\n+password = 'abc123'",  # pr-analyzer: ignore
             )
         ]
     )

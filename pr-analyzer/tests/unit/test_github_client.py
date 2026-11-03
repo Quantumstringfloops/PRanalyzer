@@ -184,7 +184,7 @@ def make_pr_summary():
 
 def make_suggestion():
     return Suggestion(filename="app.py", severity="HIGH", category="security",
-                      title="eval() usage detected", description="Avoid eval.", line=3)
+                      title="eval() usage detected", description="Avoid eval.", line=3)  # pr-analyzer: ignore
 
 def test_post_review_sends_line_comments(github):
     GithubClient(token="t").post_review(make_pr_summary(), "body", [(make_suggestion(), 3)])
@@ -195,7 +195,7 @@ def test_post_review_sends_line_comments(github):
         "path": "app.py",
         "line": 3,
         "side": "RIGHT",
-        "body": "**HIGH** — eval() usage detected\n\nAvoid eval.",
+        "body": "**HIGH** — eval() usage detected\n\nAvoid eval.",  # pr-analyzer: ignore
     }]
     github.repo.get_commit.assert_called_once_with("abc123")
 

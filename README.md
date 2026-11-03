@@ -108,6 +108,16 @@ URLs copied from a PR's *Files changed*, *Commits* or *Checks* tab work too.
 
 **Exit codes:** `0` passed · `1` blocked (with `--fail-on-block`) · `2` the PR could not be analysed (bad URL, authentication, rate limit, or an unexpected error)
 
+### Ignoring a finding
+
+Put `pr-analyzer: ignore` in a comment on the line, ideally with the reason:
+
+```python
+subprocess.run(cmd, shell=True)  # pr-analyzer: ignore - cmd is a fixed string
+```
+
+Every finding on that line is dropped and doesn't count towards the score, whichever check reported it: the regex rules, Semgrep, the dependency audit or the LLM. The report's warnings name each ignored line, so a reviewer can see what a PR silenced.
+
 ---
 
 ## Sample Output
@@ -248,6 +258,7 @@ Only MEDIUM, HIGH and CRITICAL findings get inline comments, and only on lines t
 - **Dependency audit checks exact pins only** — `name==version` lines added to `requirements*.txt`; ranges, `pyproject.toml` and lock files are not audited.
 - **Semgrep's default ruleset is downloaded** from the Semgrep registry, so it needs network access (point `SEMGREP_CONFIG` at a local file to avoid that).
 - **Fork PRs cannot post reviews** — GitHub blocks write tokens on PRs from forks by default.
+- **Ignore markers are the PR author's call** — anyone can add `pr-analyzer: ignore` to a line. The report names every ignored line, so check them during review.
 
 ---
 
