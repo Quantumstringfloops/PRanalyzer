@@ -24,7 +24,10 @@ class Settings(BaseSettings):
     llm_confidence_threshold: float = Field(default=0.5, ge=0, le=1)
     llm_timeout_seconds: float = Field(default=120, gt=0)
     llm_max_tokens: int = Field(default=4096, gt=0)
-    max_diff_lines: int = Field(default=3000, gt=0)   # diff lines sent to the LLM
+    max_diff_lines: int = Field(default=3000, gt=0)   # diff lines per LLM request
+    # estimated prompt tokens (characters / 4) one run may send; 0 = no limit
+    llm_token_budget: int = Field(default=200_000, ge=0)
+    llm_max_concurrency: int = Field(default=1, ge=1)   # LLM requests in flight at once
     ollama_url: str = "http://localhost:11434"
     openai_api_key: str = ""
     anthropic_api_key: str = ""

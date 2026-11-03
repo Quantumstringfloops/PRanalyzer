@@ -96,6 +96,7 @@ class AnalysisPipeline:
             try:
                 llm_suggestions = self.llm.analyze(pr, existing_findings)
                 llm_provider_used = settings.llm_provider
+                warnings.extend(self.llm.warnings)   # e.g. files left out over LLM_TOKEN_BUDGET
             except Exception as e:  # the LLM review is optional; keep the deterministic results
                 log.warning("llm_failed", error=str(e))
                 warnings.append(f"LLM review skipped: {e}")

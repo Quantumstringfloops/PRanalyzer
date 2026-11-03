@@ -174,6 +174,20 @@ def test_llm_findings_on_marked_lines_are_ignored():
     assert result.suggestions == []
     assert any("auth.py:1" in w for w in result.warnings)
 
+def test_llm_warnings_reach_the_result():
+    pipeline = AnalysisPipeline()
+    note = "2 of 3 file(s) were not AI-reviewed, or only in part: an LLM request failed (timeout)"
+
+    def partial_review(pr, existing):
+        pipeline.llm.warnings = [note]
+        return []
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=make_pr()):
+        with patch.object(pipeline.llm, "analyze", side_effect=partial_review):
+            result = pipeline.run("https://github.com/neil/repo/pull/1")
+
+    assert note in result.warnings
+
 def test_security_tool_warnings_reach_the_result():
     pipeline = AnalysisPipeline(skip_llm=True)
 
