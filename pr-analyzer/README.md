@@ -68,16 +68,16 @@ Every check reports only lines the PR adds, so a PR is never blamed for code it 
 
 ## Install
 
-Python 3.11 or newer. The package is called `pranalyzer` on PyPI; the command it installs is `pr-analyzer`.
+Python 3.11 or newer. The package is called `pr-analyzer-cli` on PyPI (`pr-analyzer` there is an unrelated project); the command it installs is `pr-analyzer`.
 
 ```bash
-pip install pranalyzer                  # static checks, secret scanning, LLM review through Ollama
-pip install "pranalyzer[security]"      # adds Semgrep and pip-audit
-pip install "pranalyzer[openai]"        # adds the OpenAI SDK, for LLM_PROVIDER=openai
-pip install "pranalyzer[anthropic]"     # adds the Anthropic SDK, for LLM_PROVIDER=anthropic
+pip install pr-analyzer-cli                  # static checks, secret scanning, LLM review through Ollama
+pip install "pr-analyzer-cli[security]"      # adds Semgrep and pip-audit
+pip install "pr-analyzer-cli[openai]"        # adds the OpenAI SDK, for LLM_PROVIDER=openai
+pip install "pr-analyzer-cli[anthropic]"     # adds the Anthropic SDK, for LLM_PROVIDER=anthropic
 ```
 
-Extras combine: `pip install "pranalyzer[security,openai]"`. `pipx install pranalyzer` works too.
+Extras combine: `pip install "pr-analyzer-cli[security,openai]"`. `pipx install pr-analyzer-cli` works too.
 
 ## Quickstart
 
@@ -428,10 +428,10 @@ A PR is **blocked** if any suggestion has severity `CRITICAL` or `HIGH`, regardl
 ## Troubleshooting
 
 **`zsh: command not found: pr-analyzer`**
-Activate the virtualenv you installed `pranalyzer` into, or use `pipx install pranalyzer`. From a source checkout, run it through Poetry: `poetry run pr-analyzer`.
+Activate the virtualenv you installed `pr-analyzer-cli` into, or use `pipx install pr-analyzer-cli`. From a source checkout, run it through Poetry: `poetry run pr-analyzer`.
 
 **`ModuleNotFoundError: No module named 'pr_analyzer'`**
-Install the package (`pip install pranalyzer`), or from a source checkout run `poetry install` in the `pr-analyzer/` directory (the one with `pyproject.toml`).
+Install the package (`pip install pr-analyzer-cli`), or from a source checkout run `poetry install` in the `pr-analyzer/` directory (the one with `pyproject.toml`).
 
 **`Authentication failed` or `GitHub rate limit hit`**
 Set `GITHUB_TOKEN`. The `.env` file must be in the directory you run the command from, or export the variable in your shell. A rate limit that resets within `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS` is waited out; the message means it resets later than that.
@@ -440,7 +440,7 @@ Set `GITHUB_TOKEN`. The `.env` file must be in the directory you run the command
 The PR was reviewed in parts and some were left out: either `LLM_TOKEN_BUDGET` ran out (raise it, or set `0` for no limit) or an LLM request failed (the warning names the error). The other checks covered every file.
 
 **Warning: `Semgrep scan skipped` / `Dependency audit skipped`**
-The scanners are optional. Install them with `pip install "pranalyzer[security]"` (from source: `poetry install --extras "security"`).
+The scanners are optional. Install them with `pip install "pr-analyzer-cli[security]"` (from source: `poetry install --extras "security"`).
 
 **Warning: `LLM review skipped: Could not reach Ollama`**
 Start Ollama and pull the model (`ollama pull llama3.2`), point `LLM_PROVIDER` at OpenAI or Anthropic, or pass `--skip-llm`.
@@ -484,7 +484,7 @@ Maintainers publish to PyPI by pushing a version tag; `.github/workflows/release
 
 The workflow stops if the tag doesn't match the version, then runs the tests, builds the wheel and sdist, checks them with `twine check --strict`, installs the wheel and runs it, and publishes with PyPI Trusted Publishing, so no API token is stored anywhere. Running the workflow by hand (Actions → Release → Run workflow) publishes the build to TestPyPI instead, as a rehearsal; TestPyPI refuses a version it already has.
 
-One-time setup: on PyPI, add a trusted publisher for the project `pranalyzer` with owner `Quantumstringfloops`, repository `PRanalyzer`, workflow `release.yml` and environment `pypi`; do the same on TestPyPI with environment `testpypi`. Then create both environments under the repository's *Settings → Environments*. Required reviewers on `pypi` make every release wait for an approval.
+One-time setup, before the first tag: on PyPI, add a pending trusted publisher (your account's *Publishing* page) for the project `pr-analyzer-cli` with owner `Quantumstringfloops`, repository `PRanalyzer`, workflow `release.yml` and environment `pypi`; do the same on TestPyPI with environment `testpypi`. PyPI checks the project name there, the same way it does on the first upload, so a name it won't accept is caught before anything is tagged. Then create both environments under the repository's *Settings → Environments*. Required reviewers on `pypi` make every release wait for an approval.
 
 ---
 

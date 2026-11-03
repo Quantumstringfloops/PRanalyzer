@@ -112,7 +112,7 @@ class LLMEngine:
             import openai
         except ImportError as e:
             raise LLMError("LLM_PROVIDER=openai needs the openai package: "
-                           "pip install 'pranalyzer[openai]'") from e
+                           "pip install 'pr-analyzer-cli[openai]'") from e
         if not settings.openai_api_key:
             raise LLMError("OPENAI_API_KEY is not set")
 
@@ -142,7 +142,7 @@ class LLMEngine:
             import anthropic
         except ImportError as e:
             raise LLMError("LLM_PROVIDER=anthropic needs the anthropic package: "
-                           "pip install 'pranalyzer[anthropic]'") from e
+                           "pip install 'pr-analyzer-cli[anthropic]'") from e
         if not settings.anthropic_api_key:
             raise LLMError("ANTHROPIC_API_KEY is not set")
 

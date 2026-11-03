@@ -36,7 +36,7 @@ class SemgrepRunner:
         executable = tools.find_tool("semgrep")
         if executable is None:
             self._warn("Semgrep scan skipped: semgrep is not installed "
-                       "(pip install 'pranalyzer[security]')")
+                       "(pip install 'pr-analyzer-cli[security]')")
             return []
 
         # one run over a copy of every changed file, laid out with its repo path so findings map
