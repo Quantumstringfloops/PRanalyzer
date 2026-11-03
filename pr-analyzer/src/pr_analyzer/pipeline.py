@@ -27,6 +27,32 @@ def gets_inline_comment(s: Suggestion) -> bool:
     return s.severity.upper() in INLINE_SEVERITIES
 
 
+def findings_off_the_diff(findings: list[Suggestion]) -> list[str]:
+    # review-body lines for findings that should have had an inline comment but whose line
+    # isn't part of the diff
+    if not findings:
+        return []
+    lines = ["", f"**Findings not attached to a diff line ({len(findings)}):**"]
+    for s in findings[:MAX_LISTED_IN_REVIEW]:
+        where = f"{s.filename}:{s.line}" if s.line else s.filename
+        lines.append(f"- **{s.severity}** `{where}` — {s.title}")
+    if len(findings) > MAX_LISTED_IN_REVIEW:
+        lines.append(f"- … and {len(findings) - MAX_LISTED_IN_REVIEW} more")
+    return lines
+
+
+def low_severity_counts(findings: list[Suggestion]) -> list[str]:
+    if not findings:
+        return []
+    counts = Counter(s.title for s in findings).most_common()
+    lines = ["", f"**Low-severity findings ({len(findings)}), counted but not commented inline:**"]
+    lines += [f"- {count} × {title}" for title, count in counts[:MAX_LISTED_IN_REVIEW]]
+    if len(counts) > MAX_LISTED_IN_REVIEW:
+        rest = sum(count for _, count in counts[MAX_LISTED_IN_REVIEW:])
+        lines.append(f"- … and {rest} more")
+    return lines
+
+
 class AnalysisPipeline:
     def __init__(self, skip_llm: bool = False, post_review: bool = False):
         self.github   = GithubClient()
@@ -143,23 +169,10 @@ class AnalysisPipeline:
         ]
 
         inline = {id(s) for s, _ in comments}
-        others = [s for s in result.suggestions if gets_inline_comment(s) and id(s) not in inline]
-        if others:
-            lines += ["", f"**Findings not attached to a diff line ({len(others)}):**"]
-            for s in others[:MAX_LISTED_IN_REVIEW]:
-                where = f"{s.filename}:{s.line}" if s.line else s.filename
-                lines.append(f"- **{s.severity}** `{where}` — {s.title}")
-            if len(others) > MAX_LISTED_IN_REVIEW:
-                lines.append(f"- … and {len(others) - MAX_LISTED_IN_REVIEW} more")
-
-        low = [s for s in result.suggestions if not gets_inline_comment(s)]
-        if low:
-            counts = Counter(s.title for s in low).most_common()
-            lines += ["", f"**Low-severity findings ({len(low)}), counted but not commented inline:**"]
-            lines += [f"- {count} × {title}" for title, count in counts[:MAX_LISTED_IN_REVIEW]]
-            if len(counts) > MAX_LISTED_IN_REVIEW:
-                rest = sum(count for _, count in counts[MAX_LISTED_IN_REVIEW:])
-                lines.append(f"- … and {rest} more")
+        lines += findings_off_the_diff(
+            [s for s in result.suggestions if gets_inline_comment(s) and id(s) not in inline]
+        )
+        lines += low_severity_counts([s for s in result.suggestions if not gets_inline_comment(s)])
 
         if result.warnings:
             lines += ["", "**Notes:**"] + [f"- {w}" for w in result.warnings]
