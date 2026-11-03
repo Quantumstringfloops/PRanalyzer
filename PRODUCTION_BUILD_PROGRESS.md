@@ -69,7 +69,9 @@ Permission to rewrite modules and the added scalability requirements don't chang
   - The summary review now carries a hidden tag, and later runs edit it in place.
   - Inline comments are posted only for findings not already commented on the PR. Comments GitHub has marked outdated don't count.
   - Tests: 217 pass, including 6 new ones for repeat runs; ruff and mypy are clean.
-  - Pushed to PR #3, where the bot ran it straight away. Expected result: one new tagged summary review, because the earlier review predates the tag, and no repeated inline comments. Any run after that should only edit the tagged review.
+  - **Verified on PR #3**, and all checks passed both times:
+    - The run on `57eef90` added one tagged summary review, as expected, since the first review predates the tag. It repeated none of the 7 inline comments.
+    - The run on `5a8c06d` added no review. It only edited the tagged one: its footer's run time went from 23.11s to 28.22s.
 
 ## Work Remaining
 
@@ -87,10 +89,6 @@ Permission to rewrite modules and the added scalability requirements don't chang
 
 **Do not start or resume a production build from this file.** The gate failed.
 
-PR #3 (https://github.com/Quantumstringfloops/PRanalyzer/pull/3) is open from `fix/working-cli`. Merging it is the user's call.
-
-Once the bot's run on `57eef90` finishes, check that it added one tagged summary review and repeated no inline comments.
-
-This entry is committed locally but not pushed, because a push while the bot is running cancels that run. Push it next: the bot's run on that push should only edit the tagged review, which tests the fix on a real PR.
+PR #3 (https://github.com/Quantumstringfloops/PRanalyzer/pull/3) is open from `fix/working-cli`. All of its checks pass, and the bot's behaviour on repeat runs is verified. Merging it is the user's call. The remaining follow-ups are under Work Remaining.
 
 If the user changes the preconditions above and explicitly asks, re-run the gate.
