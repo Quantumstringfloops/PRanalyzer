@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 import structlog
+from rich.text import Text
 from typer.testing import CliRunner
 
 from pr_analyzer import cli
@@ -131,7 +132,8 @@ def test_help_works():
     # wide enough that the option names aren't cut short
     result = runner.invoke(cli.app, ["analyze", "--help"], env={"COLUMNS": "200", "TERMINAL_WIDTH": "200"})
     assert result.exit_code == 0
-    assert "--no-fail-on-block" in result.stdout
+    # Typer forces colour on GitHub Actions, and the escape codes split the option names up
+    assert "--no-fail-on-block" in Text.from_ansi(result.stdout).plain
 
 def test_version():
     result = runner.invoke(cli.app, ["version"])
