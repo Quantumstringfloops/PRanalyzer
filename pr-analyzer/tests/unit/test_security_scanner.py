@@ -198,6 +198,11 @@ def test_sql_string_with_inner_quotes_is_still_flagged():
     code = "cur.execute(\"SELECT * FROM t WHERE name = '%s'\" % name)"  # pr-analyzer: ignore
     assert "Possible SQL injection" in titles(make_file(added(code)))
 
+def test_a_character_literal_does_not_hide_the_rest_of_the_line():
+    # '"' used to open a string that ran to the end of the line
+    code = "if (c == '\"') stmt.execute(\"SELECT * FROM t WHERE id=\" + id);"  # pr-analyzer: ignore
+    assert titles(make_file(added(code), filename="Lexer.java")) == ["Possible SQL injection"]
+
 def test_php_hash_comment_is_not_a_call():
     # a # comment used to be read as code in PHP, so this blocked the run with a HIGH finding
     file = make_file(added("# never eval($input) here"), filename="index.php")  # pr-analyzer: ignore

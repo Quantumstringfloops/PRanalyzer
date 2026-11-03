@@ -25,7 +25,19 @@ def test_escaped_quotes_stay_inside_the_string():
     assert split_line(r'msg = "say \"hi\" now"; run()', ".py").code == f'msg = "{blanks(14)}"; run()'
 
 def test_single_line_triple_quoted_string():
-    assert split_line('"""Call print(x) to debug."""', ".py").code == f'"""{blanks(23)}"""'
+    assert split_line('x = """Call print(x) to debug."""', ".py").code == f'x = """{blanks(23)}"""'
+
+@pytest.mark.parametrize("line", [
+    '"""Call print(x) to debug."""', '    """Parse the header.', "    r'''TODO: v2.'''  # noqa",
+])
+def test_a_line_holding_only_a_docstring_is_a_comment(line):
+    # a docstring is a note, not data: a to-do marker in it was missed
+    parts = split_line(line, ".py")
+    assert parts.code.strip() == "" and parts.comments == line
+
+@pytest.mark.parametrize("line", ['"""a""" + b', 'f"""{x}"""', '"""a""""'])
+def test_a_string_that_only_starts_the_line_is_no_docstring(line):
+    assert split_line(line, ".py").comments.strip() == ""
 
 def test_unclosed_string_runs_to_the_end_of_the_line():
     # the first line of a multi-line string: the rest of the line is text
@@ -93,6 +105,12 @@ def test_c_family_strings_and_comments():
 
 def test_rust_lifetimes_are_not_strings():
     assert split_line("fn f<'a>(x: &'a str) {}", ".rs").code == "fn f<'a>(x: &'a str) {}"
+
+def test_c_family_character_literals_are_strings():
+    # '"' used to open a string that ran to the end of the line and hid the comment
+    parts = split_line("case '\"': quoted = !quoted; // TODO: escapes", ".c")
+    assert parts.code.rstrip() == "case ' ': quoted = !quoted;"
+    assert parts.comments.strip() == "// TODO: escapes"
 
 @pytest.mark.parametrize("line, extension", [
     ("#define CACHE_TTL_SECONDS 90", ".h"),

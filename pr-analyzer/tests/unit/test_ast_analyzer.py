@@ -193,11 +193,23 @@ def test_calls_inside_strings_and_comments_are_not_flagged(line, filename):
 def test_a_call_after_a_string_is_still_flagged():
     assert rules_for('label = "#"; print(label)') == ["print-call"]
 
-def test_todo_counts_only_in_comments():
+def test_todo_counts_in_comments_but_not_in_strings():
     assert rules_for('status = "TODO"') == []
+    assert rules_for('label = f"TODO: {name}"') == []
     assert rules_for("x = 1  # TODO: tidy") == ["todo-comment"]
     assert rules_for("run();  // FIXME later", "app.js") == ["todo-comment"]
     assert rules_for("run(); /* TODO */", "app.ts") == ["todo-comment"]
+
+@pytest.mark.parametrize("line, filename", [
+    ("    TODO: support the v2 format.", "parse.py"),            # a docstring's middle line
+    ('"""TODO: document this."""', "parse.py"),                  # a one-line docstring
+    ('    """Parse the header. TODO: handle v2.', "parse.py"),   # a docstring's first line
+    ("   FIXME: this races with the reconnect", "socket.js"),    # inside a /* */ comment
+    ("case '\"': quoted = !quoted; // TODO: escapes", "lexer.c"),   # after a character literal
+])
+def test_todo_in_docstrings_and_comment_bodies(line, filename):
+    # only # and // comments used to count, so these notes went unreported
+    assert rules_for(line, filename) == ["todo-comment"]
 
 # ── magic numbers ─────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("line, filename", [

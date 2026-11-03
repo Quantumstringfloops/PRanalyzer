@@ -73,9 +73,9 @@ def explained_number(code: str, match: re.Match[str]) -> bool:
 
 
 # Each rule runs on one added line at a time (the text after the leading "+"). Its "id" is the
-# stable name .pr-analyzer.toml uses to switch it off. Its "scope" picks the view of the line it
-# reads (see line_lexer): "code" leaves out comments and the contents of strings, "comments" is
-# the comments alone. An optional "exempt" callable can wave off individual matches.
+# stable name .pr-analyzer.toml uses to switch it off. Its "scope" picks the views of the line it
+# reads (see line_lexer): "code" leaves out comments and the contents of strings, "code+comments"
+# only the contents of strings. An optional "exempt" callable can wave off individual matches.
 # Hardcoded secrets are not checked here: the security scanner owns them, and checking them in
 # both places used to penalise the same line twice.
 PATTERNS: list[dict[str, Any]] = [
@@ -83,8 +83,9 @@ PATTERNS: list[dict[str, Any]] = [
         "id": "todo-comment",
         "regex": re.compile(r"\b(TODO|FIXME)\b"),
         "extensions": CODE_EXTENSIONS,
-        # in a string the marker is data, such as a status value, not a note to the team
-        "scope": "comments",
+        # In a string the marker is data, such as a status value, not a note to the team. The
+        # middle lines of a docstring or a /* */ comment read as code, so code counts too.
+        "scope": "code+comments",
         "severity": "LOW",
         "category": "style",
         "title": "TODO/FIXME comment added",
@@ -298,7 +299,11 @@ def patterns_for(filename: str, disabled: Collection[str] = ()) -> list[dict[str
 
 
 def line_matches(pattern: dict[str, Any], parts: LineParts) -> bool:
-    text = parts.comments if pattern["scope"] == "comments" else parts.code
+    views = (parts.code, parts.comments) if pattern["scope"] == "code+comments" else (parts.code,)
+    return any(view_matches(pattern, view) for view in views)
+
+
+def view_matches(pattern: dict[str, Any], text: str) -> bool:
     skip_if = pattern.get("skip_if")
     if skip_if is not None and skip_if.search(text):
         return False

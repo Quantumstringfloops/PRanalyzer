@@ -1,8 +1,8 @@
 """Tell code, string literals and comments apart on one line of source.
 
 The line rules look at one added line at a time. A rule about a call must not fire on text inside
-a string or a comment, and the rule about to-do markers should fire only in comments, so a line
-is split into two views of the same length:
+a string or a comment, and the rule about to-do markers must not fire on what a string holds, so
+a line is split into two views of the same length:
 
     line:      x = run(y)  # run("1") is fine
     code:      x = run(y)
@@ -16,15 +16,16 @@ code, so they stay; only the text around them, and a format spec, is blanked
 
 Python, JavaScript/TypeScript and C-family files are lexed; for any other language both views are
 the whole line, which is how every rule matched before. Some lines are comments as a whole: a line
-starting with `*` (the middle of a /* */ block, which started on an earlier line) and, in C, C++
-and C#, a line starting with `#` (a preprocessor directive such as `#define` or `#pragma`).
+starting with `*` (the middle of a /* */ block, which started on an earlier line), a Python line
+holding only a docstring (a note, not data) and, in C, C++ and C#, a line starting with `#` (a
+preprocessor directive such as `#define` or `#pragma`).
 
 Limits, since each line is read alone:
 
 - a line inside a multi-line string (a docstring's middle lines, a template literal spanning
   lines) or inside a /* */ block is read as code, unless it starts like a comment (`*`, `#`, `//`);
 - JavaScript regex literals aren't recognised, so a quote inside one hides the rest of the line;
-- in C-family files only double-quoted strings are recognised.
+- in C-family files only double-quoted strings and character literals ('"') are recognised.
 """
 import re
 from collections.abc import Mapping
@@ -52,6 +53,7 @@ class Syntax:
     tokens: re.Pattern[str]         # a comment, a string, or the start of an interpolated string
     field_tokens: re.Pattern[str]   # the same plus brackets, inside a replacement field
     comment_lines: tuple[str, ...] = ("*",)     # a line starting with one of these is a comment
+    docstring: re.Pattern[str] | None = None    # a line this fully matches is a comment too
     # The text of an interpolated string up to a replacement field, by (quote, raw), and what
     # opens a field: Python's f-strings and t-strings and JavaScript's template literals have them.
     template_text: Mapping[tuple[str, bool], re.Pattern[str]] = field(default_factory=dict)
@@ -80,6 +82,11 @@ PYTHON = Syntax(
     tokens=re.compile(_PYTHON_TOKENS),
     # a ":" outside brackets ends a field's expression and starts its format spec
     field_tokens=re.compile(_PYTHON_TOKENS + _BRACKETS + r"|(?P<colon>:)"),
+    # a triple-quoted string alone on its line, closed there or not
+    docstring=re.compile(
+        r'\s*[rRuU]?(?:"""(?:\\(?:.|$)|[^\\"]|"(?!""))*(?:"""\s*(?:#.*)?)?'
+        r"|'''(?:\\(?:.|$)|[^\\']|'(?!''))*(?:'''\s*(?:#.*)?)?)"
+    ),
     template_text={
         (quote, raw): _fstring_text(quote, raw)
         for quote in ('"', "'", '"""', "'''") for raw in (False, True)
@@ -99,8 +106,10 @@ JAVASCRIPT = Syntax(
     field_opener="${",
 )
 
-# single quotes are char literals or (in Rust) lifetimes, so only "..." counts as a string
-_C_TOKENS = re.compile(rf"(?P<comment>//.*|{_BLOCK_COMMENT})|(?P<string>{_STRING})")
+# Single quotes hold one character ('"', '\n'); a lone one is a Rust lifetime ('a).
+_C_TOKENS = re.compile(
+    rf"(?P<comment>//.*|{_BLOCK_COMMENT})|(?P<string>{_STRING}|'(?:\\.|[^'\\])')"
+)
 C_FAMILY = Syntax(tokens=_C_TOKENS, field_tokens=_C_TOKENS)
 # a line starting with "#" is a preprocessor directive (#define, #pragma, #region), not code
 C_PREPROCESSED = replace(C_FAMILY, comment_lines=("*", "#"))
@@ -127,7 +136,9 @@ def split_line(text: str, extension: str) -> LineParts:
     if syntax is None:
         # Without a lexer, any comment prefix marks a whole-line comment, as it always did.
         return LineParts(" " * len(text), text) if is_comment(text) else LineParts(text, text)
-    if text.lstrip().startswith(syntax.comment_lines):
+    if text.lstrip().startswith(syntax.comment_lines) or (
+        syntax.docstring is not None and syntax.docstring.fullmatch(text)
+    ):
         return LineParts(" " * len(text), text)
     return _Lexer(text, syntax).split()
 
