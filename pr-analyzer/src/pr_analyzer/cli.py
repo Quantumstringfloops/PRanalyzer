@@ -16,6 +16,7 @@ from pr_analyzer.exceptions import (
     PRAnalyzerError,
 )
 from pr_analyzer.logging_config import setup_logging
+from pr_analyzer.models import AnalysisResult
 from pr_analyzer.pipeline import AnalysisPipeline
 from pr_analyzer.reporting.rich_reporter import RichReporter
 
@@ -49,6 +50,16 @@ def package_version() -> str:
         return "unknown"
 
 
+def print_report(result: AnalysisResult, output: OutputFormat) -> None:
+    # rich is the default, json and markdown are for CI and sharing
+    if output is OutputFormat.json:
+        reporter.print_json_report(result)
+    elif output is OutputFormat.markdown:
+        reporter.print_markdown_report(result)
+    else:
+        reporter.print_rich_report(result)
+
+
 @app.command()
 def analyze(
     pr_url: Annotated[str, typer.Argument(help="Full GitHub PR URL")],
@@ -57,6 +68,7 @@ def analyze(
     fail_on_block: Annotated[bool, typer.Option("--fail-on-block/--no-fail-on-block", help="Exit with code 1 if blocking issues are found")] = True,
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Report format")] = OutputFormat.rich,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show progress logs (on stderr)")] = False,
+    no_cache: Annotated[bool, typer.Option("--no-cache", help="Don't read or write the on-disk cache")] = False,
 ):
     """
     Analyze a GitHub pull request for code quality issues.
@@ -74,7 +86,7 @@ def analyze(
     # everything else is just error handling and output routing
     pipeline = None
     try:
-        pipeline = AnalysisPipeline(skip_llm=skip_llm, post_review=post_review)
+        pipeline = AnalysisPipeline(skip_llm=skip_llm, post_review=post_review, use_cache=not no_cache)
         result = pipeline.run(pr_url)
 
     except InvalidPRURLError as e:
@@ -120,13 +132,7 @@ def analyze(
             pipeline.close()
 
     # hand off to the correct reporter — cli.py never prints anything itself
-    # rich is the default, json and markdown are for CI and sharing
-    if output is OutputFormat.json:
-        reporter.print_json_report(result)
-    elif output is OutputFormat.markdown:
-        reporter.print_markdown_report(result)
-    else:
-        reporter.print_rich_report(result)
+    print_report(result, output)
 
     # exit code is the only thing cli.py "returns" to the terminal
     # code 1 means blocked — CI systems use this to fail the pipeline

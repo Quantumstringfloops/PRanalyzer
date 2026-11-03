@@ -188,6 +188,16 @@ def test_llm_warnings_reach_the_result():
 
     assert note in result.warnings
 
+# ── test: the cache ───────────────────────────────────────────────────────────
+def test_github_and_llm_share_the_cache():
+    pipeline = AnalysisPipeline()
+    assert pipeline.cache.enabled
+    assert pipeline.github.cache is pipeline.cache and pipeline.llm.cache is pipeline.cache
+
+def test_no_cache_leaves_it_alone():
+    pipeline = AnalysisPipeline(use_cache=False)
+    assert not pipeline.github.cache.enabled and not pipeline.llm.cache.enabled
+
 def test_security_tool_warnings_reach_the_result():
     pipeline = AnalysisPipeline(skip_llm=True)
 

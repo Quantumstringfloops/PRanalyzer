@@ -36,8 +36,9 @@ def pipeline(monkeypatch):
     state = SimpleNamespace(result=make_result(), error=None, instances=[])
 
     class FakePipeline:
-        def __init__(self, skip_llm=False, post_review=False):
+        def __init__(self, skip_llm=False, post_review=False, use_cache=True):
             self.skip_llm, self.post_review, self.closed = skip_llm, post_review, False
+            self.use_cache = use_cache
             state.instances.append(self)
 
         def run(self, url):
@@ -67,7 +68,12 @@ def test_flags_reach_the_pipeline(pipeline):
 def test_flag_defaults(pipeline):
     invoke()
     [instance] = pipeline.instances
-    assert (instance.skip_llm, instance.post_review) == (False, False)
+    assert (instance.skip_llm, instance.post_review, instance.use_cache) == (False, False, True)
+
+def test_no_cache_flag_reaches_the_pipeline(pipeline):
+    assert invoke("--no-cache").exit_code == 0
+    [instance] = pipeline.instances
+    assert instance.use_cache is False
 
 # ── exit codes ────────────────────────────────────────────────────────────────
 def test_blocked_pr_exits_1(pipeline):
