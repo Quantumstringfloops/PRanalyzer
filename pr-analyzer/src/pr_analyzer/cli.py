@@ -47,7 +47,7 @@ def fail(*messages: str) -> NoReturn:
 
 
 # the name on PyPI; the command and the import package are still called pr-analyzer / pr_analyzer
-DISTRIBUTION = "pranalyzer"
+DISTRIBUTION = "pr-analyzer-cli"
 
 
 def package_version() -> str:

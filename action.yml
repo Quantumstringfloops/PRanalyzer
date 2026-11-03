@@ -102,11 +102,15 @@ runs:
           esac
         done
 
+        # The workspace may hold the PR's own code, and `python -m` looks in the current
+        # directory first, so a pip.py there would run in place of pip: install from outside
+        # it, with Python isolated (-I) from the current directory and PYTHON* variables.
+        cd "$RUNNER_TEMP"
         venv="$RUNNER_TEMP/pr-analyzer-venv"
-        "$PYTHON" -m venv "$venv"
+        "$PYTHON" -I -m venv "$venv"
         bin="$venv/bin"
         [ -d "$bin" ] || bin="$venv/Scripts"
-        "$bin/python" -m pip install --quiet --disable-pip-version-check "$SOURCE${extras:+[$extras]}"
+        "$bin/python" -I -m pip install --quiet --disable-pip-version-check "$SOURCE${extras:+[$extras]}"
         echo "bin=$bin" >> "$GITHUB_OUTPUT"
 
     - name: Analyse the pull request
@@ -148,19 +152,20 @@ runs:
         fi
 
         # pr-analyzer reads a .env file from its working directory, and the workspace may hold
-        # the PR's own code: run from an empty directory instead
+        # the PR's own code: run from an empty directory instead. Python also gets -I, so it
+        # never looks for modules in the current directory, wherever that is.
         mkdir -p "$RUNNER_TEMP/pr-analyzer-run"
         cd "$RUNNER_TEMP/pr-analyzer-run" || exit 2
         report="$RUNNER_TEMP/pr-analyzer-report.json"
 
         # The log shows text shaped by the PR (finding titles, file names, error messages), which
         # must not be read as workflow commands such as ::error:: while it is printed.
-        token="$("$PR_ANALYZER_BIN/python" -c 'import secrets; print(secrets.token_hex(16))')"
+        token="$("$PR_ANALYZER_BIN/python" -I -c 'import secrets; print(secrets.token_hex(16))')"
         echo "::stop-commands::$token"
         status=0
         "$PR_ANALYZER_BIN/pr-analyzer" "${args[@]}" > "$report" || status=$?
         if [ -s "$report" ]; then
-          "$PR_ANALYZER_BIN/python" - "$report" <<'EOF'
+          "$PR_ANALYZER_BIN/python" -I - "$report" <<'EOF'
         import json, os, sys
 
         def line(text):

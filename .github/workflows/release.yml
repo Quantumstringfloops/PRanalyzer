@@ -92,7 +92,7 @@ jobs:
     # stored anywhere. The environment can require a reviewer's approval in the repo settings.
     environment:
       name: pypi
-      url: https://pypi.org/project/pranalyzer/
+      url: https://pypi.org/p/pr-analyzer-cli
     permissions:
       id-token: write   # the OIDC token PyPI exchanges for a short-lived upload token
     steps:
@@ -112,7 +112,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: testpypi
-      url: https://test.pypi.org/project/pranalyzer/
+      url: https://test.pypi.org/p/pr-analyzer-cli
     permissions:
       id-token: write   # the OIDC token TestPyPI exchanges for a short-lived upload token
     steps:
