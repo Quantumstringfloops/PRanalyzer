@@ -40,10 +40,28 @@ RULE_IDS = frozenset(ast_analyzer.RULE_IDS + scanner.RULE_IDS + (LLM_RULE,))
 KEYS = ("disable", "ignore_paths", "block_on", "inline_min_severity", "thresholds")
 THRESHOLD_KEYS = tuple(f.name for f in dataclasses.fields(Thresholds))
 
-# gitignore-style wildcards: `**/` is any number of directories, `**` anything, `*` and `?` stay
-# within one path segment; everything else is literal
-_GLOB_TOKEN = re.compile(r"\*\*/|\*\*|\*|\?|[^*?]+")
-_GLOB_PARTS = {"**/": "(?:.*/)?", "**": ".*", "*": "[^/]*", "?": "[^/]"}
+# The part of .gitignore's syntax that ignore_paths supports, matched as git matches it: `*` and
+# `?` stay within one path segment, and `**` as a whole segment crosses directories (`**/` any
+# number of them, a final `/**` everything inside); any other run of asterisks is a `*`, and
+# everything else is literal. The syntax in _UNSUPPORTED is rejected instead.
+_GLOB_TOKEN = re.compile(
+    r"(?P<dirs>(?:\A|(?<=/))\*{2,}/)|(?P<rest>(?:\A|(?<=/))\*{2,}\Z)|(?P<star>\*+)|(?P<one>\?)"
+    r"|[^*?]+"
+)
+_GLOB_PARTS = {"dirs": "(?:.*/)?", "rest": ".*", "star": "[^/]*", "one": "[^/]"}
+# syntax that git reads differently from the literal text glob_regex would make of it
+_UNSUPPORTED = (
+    (re.compile(r"\A!"), "uses negation (a leading !), which isn't supported: ignore_paths can "
+                         "only leave files out"),
+    (re.compile(r"[\[\]]"), "uses [ or ] (a character class in git), which isn't supported: "
+                            "list each name, or use ? for any one character"),
+    (re.compile(r"\\"), "uses a backslash, which isn't supported: there are no escapes, and / "
+                        "separates directories"),
+    # git's own matcher treats foo**/bar inconsistently: across directories or within one
+    (re.compile(r"[^/*]\*{2,}/[^/]"), "has ** inside a name before a /, which isn't supported: "
+                                      "write foo*/bar for one directory, or foo*/**/bar for any "
+                                      "number"),
+)
 
 
 @dataclass(frozen=True)
@@ -64,13 +82,16 @@ class ProjectConfig:
 
 @lru_cache(maxsize=None)
 def glob_regex(pattern: str) -> re.Pattern[str]:
-    """Match repo paths the way .gitignore does: a pattern with no `/` except a trailing one
-    matches at any depth, one with a leading or inner `/` only from the repository root, and a
-    pattern that matches a directory covers every file below it."""
+    """Match repo paths the way .gitignore does, for the syntax ignore_paths accepts: a pattern
+    with no `/` except a trailing one matches at any depth, one with a leading or inner `/` only
+    from the repository root, a trailing `/` only directories, and a pattern that matches a
+    directory covers every file below it."""
     anchored = "/" in pattern.rstrip("/")
     directory_only = pattern.endswith("/")
-    tokens = _GLOB_TOKEN.findall(pattern.strip("/"))
-    body = "".join(_GLOB_PARTS.get(token, re.escape(token)) for token in tokens)
+    body = "".join(
+        _GLOB_PARTS[token.lastgroup] if token.lastgroup else re.escape(token.group())
+        for token in _GLOB_TOKEN.finditer(pattern.strip("/"))
+    )
     prefix = "" if anchored else "(?:.*/)?"
     suffix = "/.*" if directory_only else "(?:/.*)?"
     return re.compile(prefix + body + suffix)
@@ -153,8 +174,17 @@ def _rule_ids(value: Any, problems: list[str]) -> list[str]:
 
 def _ignore_paths(value: Any, problems: list[str]) -> list[str]:
     patterns = _strings("ignore_paths", value, problems)
-    problems += [f"ignore_paths: {p!r} is not a path pattern" for p in patterns if not p.strip("/")]
-    return [p for p in patterns if p.strip("/")]
+    found = {pattern: _pattern_problems(pattern) for pattern in patterns}
+    problems += [f"ignore_paths: {p!r} {why}" for p, whys in found.items() for why in whys]
+    return [p for p in patterns if not found[p]]
+
+
+def _pattern_problems(pattern: str) -> list[str]:
+    if not pattern.strip("/"):
+        return ["is not a path pattern"]
+    # rejected rather than read literally: each would quietly match something other than what
+    # the same line does in a .gitignore
+    return [why for syntax, why in _UNSUPPORTED if syntax.search(pattern)]
 
 
 def _severity(key: str, value: Any, problems: list[str]) -> str:

@@ -133,14 +133,66 @@ def test_message_names_the_file_it_came_from():
     ("src/?.py", "src/a.py", True),
     ("src/?.py", "src/ab.py", False),
     ("a+b(1).py", "lib/a+b(1).py", True),             # regex characters are taken literally
+    ("a/**/b", "a/b", True),                           # /**/ is any number of directories...
+    ("a/**/b", "a/x/y/b", True),
+    ("docs/**/", "docs/sub/a.md", True),               # ...and with a trailing /, only them
+    ("docs/**/", "docs/a.md", False),
+    ("***/x", "a/b/x", True),                          # a longer run of asterisks is a ** too
 ])
 def test_glob_matching(pattern, path, expected):
+    assert bool(glob_regex(pattern).fullmatch(path)) is expected
+
+@pytest.mark.parametrize("pattern, path, expected", [
+    # as in git, ** crosses directories only as a whole path segment; within a name it is a *.
+    # It used to cross them anywhere, ignoring files that a .gitignore line wouldn't.
+    ("foo**bar", "foo_bar", True),
+    ("foo**bar", "foo/x/bar", False),
+    ("docs/**.md", "docs/a.md", True),
+    ("docs/**.md", "docs/a/b.md", False),
+    ("a/**b", "a/xb", True),
+    ("a/**b", "a/x/b", False),
+    ("**.min.js", "static/js/app.min.js", True),       # no / means any directory, as before
+    ("build**/", "out/build-tmp/a.o", True),           # build* for directories
+    ("build**/", "build-tmp", False),
+])
+def test_double_star_inside_a_name_is_a_single_star(pattern, path, expected):
     assert bool(glob_regex(pattern).fullmatch(path)) is expected
 
 def test_ignores_checks_every_pattern():
     config = ProjectConfig(ignore_paths=("docs/**", "*.lock"))
     assert config.ignores("poetry.lock") and config.ignores("docs/a.md")
     assert not config.ignores("src/app.py")
+
+@pytest.mark.parametrize("pattern, expected", [
+    # each used to be read literally and match nothing (or the wrong files), without an error
+    ("!docs/keep.md", "'!docs/keep.md' uses negation (a leading !), which isn't supported"),
+    ("*.py[co]", "'*.py[co]' uses [ or ] (a character class in git), which isn't supported"),
+    ("[Dd]ocs/", "'[Dd]ocs/' uses [ or ]"),
+    ("docs]", "'docs]' uses [ or ]"),
+    ("docs\\api", "'docs\\\\api' uses a backslash, which isn't supported"),
+    ("\\#notes.md", "'\\\\#notes.md' uses a backslash"),
+    ("foo**/bar", "'foo**/bar' has ** inside a name before a /, which isn't supported"),
+])
+def test_unsupported_gitignore_syntax_is_rejected(pattern, expected):
+    toml = f"ignore_paths = ['docs/**', '{pattern}']"
+    assert f"ignore_paths: {expected}" in problems(toml)
+
+def test_unsupported_patterns_say_what_to_write_instead():
+    message = problems("ignore_paths = ['!a', 'b[12]', 'c\\d', 'e**/f']")
+    assert "ignore_paths can only leave files out" in message
+    assert "list each name, or use ? for any one character" in message
+    assert "/ separates directories" in message
+    assert "write foo*/bar for one directory, or foo*/**/bar for any number" in message
+    assert message.count("\n  - ") == 4
+
+@pytest.mark.parametrize("pattern", [
+    "docs/**", "**/fixtures/**", "/setup.py", "vendor/", "*.min.js", "**.min.js", "foo**bar",
+    "src/?.py", "a/**/b", "**", "build**/", "docs/!draft.md", "#notes.md", "a b.txt",
+])
+def test_supported_patterns_are_accepted(pattern):
+    # a ! after the start and a # are plain characters; only a leading ! means negation. And
+    # build**/ ends in the trailing / of a directory pattern, not in a ** before a /
+    assert parse_project_config(f"ignore_paths = ['{pattern}']").ignore_paths == (pattern,)
 
 # ── severities ────────────────────────────────────────────────────────────────
 def test_severity_rank_orders_severities_in_any_case():

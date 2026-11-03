@@ -178,7 +178,7 @@ The values shown are the defaults. Severities can be written in any case.
 
 **Where it is read from.** When a PR is analysed, `.pr-analyzer.toml` is read from the PR's **base branch** through the GitHub API, never from the PR itself, so a PR can't loosen its own checks; a change to the file takes effect once it is merged. A file in the current directory is never picked up (in CI that is the PR's own checkout). `--config PATH` uses a local file instead. No file means the defaults.
 
-**Validation.** Unknown keys, unknown rule ids, bad severities and thresholds that aren't positive whole numbers are errors: the run stops with exit code 2 and a message listing every problem, with a suggestion for likely typos:
+**Validation.** Unknown keys, unknown rule ids, bad severities, unsupported `ignore_paths` patterns and thresholds that aren't positive whole numbers are errors: the run stops with exit code 2 and a message listing every problem, with a suggestion for likely typos:
 
 ```
 Configuration error: .pr-analyzer.toml on main is invalid:
@@ -186,7 +186,15 @@ Configuration error: .pr-analyzer.toml on main is invalid:
   - disable: unknown rule id 'magic-numbers' (did you mean 'magic-number'?)
 ```
 
-**`ignore_paths` patterns** work like `.gitignore`: `*` and `?` match within one directory and `**` across directories; a pattern with no `/` (like `*.min.js`) matches in every directory, one with a leading or inner `/` (like `docs/**` or `/setup.py`) only from the repository root, a trailing `/` matches a directory, and a pattern that matches a directory covers every file in it. The report notes which files were skipped.
+**`ignore_paths` patterns** use a subset of `.gitignore` syntax, matched the way git matches it:
+
+- `*` matches any run of characters within one path segment, and `?` any one character except `/`.
+- `**` as a whole path segment crosses directories: `**/` at the start or `/**/` in the middle stands for any number of directories, including none, and `/**` at the end for everything inside. Within a name, `**` is the same as `*`, so `**.min.js` means `*.min.js`.
+- A pattern with no `/` except at the end (like `*.min.js` or `vendor/`) matches in every directory; one with a leading or inner `/` (like `/setup.py` or `docs/**`) only from the repository root.
+- A trailing `/` matches directories only, and a pattern that matches a directory covers every file in it.
+- Every other character matches itself, case-sensitively, `#` and spaces included (a `.gitignore` would read a leading `#` as a comment and drop trailing spaces).
+
+Negation (a leading `!`), `[` and `]` (character classes), backslashes (escapes) and `**` inside a name before a `/` (like `foo**/bar`, which git itself reads inconsistently) make the file invalid, rather than silently matching something other than what a `.gitignore` would. The report notes which files were skipped.
 
 **Rule ids.** Each finding's id is in the JSON report (`"rule"`), and the review summary shows it next to each counted rule.
 
