@@ -1,4 +1,5 @@
 import time
+from collections import Counter
 
 import structlog
 
@@ -16,6 +17,13 @@ log = structlog.get_logger(__name__)
 
 # findings without an inline comment that are still listed in the review body
 MAX_LISTED_IN_REVIEW = 20
+# LOW findings are only counted in the review body: a comment on every one of them buried the
+# findings that matter
+INLINE_SEVERITIES = {"CRITICAL", "HIGH", "MEDIUM"}
+
+
+def gets_inline_comment(s: Suggestion) -> bool:
+    return s.severity.upper() in INLINE_SEVERITIES
 
 
 class AnalysisPipeline:
@@ -107,6 +115,8 @@ class AnalysisPipeline:
         diff_lines = {f.filename: commentable_lines(f.patch) for f in result.pr.files if f.patch}
         comments = []
         for s in result.suggestions:
+            if not gets_inline_comment(s):
+                continue
             if s.line is not None and s.line in diff_lines.get(s.filename, set()):
                 comments.append((s, s.line))
         return comments
@@ -126,7 +136,7 @@ class AnalysisPipeline:
         ]
 
         inline = {id(s) for s, _ in comments}
-        others = [s for s in result.suggestions if id(s) not in inline]
+        others = [s for s in result.suggestions if gets_inline_comment(s) and id(s) not in inline]
         if others:
             lines += ["", f"**Findings not attached to a diff line ({len(others)}):**"]
             for s in others[:MAX_LISTED_IN_REVIEW]:
@@ -134,6 +144,15 @@ class AnalysisPipeline:
                 lines.append(f"- **{s.severity}** `{where}` — {s.title}")
             if len(others) > MAX_LISTED_IN_REVIEW:
                 lines.append(f"- … and {len(others) - MAX_LISTED_IN_REVIEW} more")
+
+        low = [s for s in result.suggestions if not gets_inline_comment(s)]
+        if low:
+            counts = Counter(s.title for s in low).most_common()
+            lines += ["", f"**Low-severity findings ({len(low)}), counted but not commented inline:**"]
+            lines += [f"- {count} × {title}" for title, count in counts[:MAX_LISTED_IN_REVIEW]]
+            if len(counts) > MAX_LISTED_IN_REVIEW:
+                rest = sum(count for _, count in counts[MAX_LISTED_IN_REVIEW:])
+                lines.append(f"- … and {rest} more")
 
         if result.warnings:
             lines += ["", "**Notes:**"] + [f"- {w}" for w in result.warnings]

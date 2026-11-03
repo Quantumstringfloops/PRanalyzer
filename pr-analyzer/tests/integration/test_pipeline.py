@@ -161,7 +161,7 @@ def test_security_tool_warnings_reach_the_result():
 def test_post_review_comments_only_on_diff_lines():
     # --post-review used to be ignored entirely
     pipeline = AnalysisPipeline(skip_llm=True, post_review=True)
-    in_diff, outside_diff, no_line = make_suggestion(1), make_suggestion(50), make_suggestion(None)
+    in_diff, outside_diff, no_line = (make_suggestion(line, "MEDIUM") for line in (1, 50, None))
 
     with patch.object(pipeline.github, "fetch_pr", return_value=make_pr()):
         with patch.object(pipeline.static, "analyze", return_value=[in_diff, outside_diff, no_line]):
@@ -173,6 +173,24 @@ def test_post_review_comments_only_on_diff_lines():
     assert comments == [(in_diff, 1)]
     assert "auth.py:50" in body           # findings without an inline comment are listed
     assert "## PR Analysis Report" in body
+
+def test_low_findings_are_counted_not_commented():
+    # a comment on every LOW finding used to bury the ones that matter
+    pipeline = AnalysisPipeline(skip_llm=True, post_review=True)
+    high = make_suggestion(1, "HIGH", title="Risky call")
+    findings = [make_suggestion(1), make_suggestion(1), make_suggestion(None, title="Long line"), high]
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=make_pr()):
+        with patch.object(pipeline.static, "analyze", return_value=findings):
+            with patch.object(pipeline.security, "scan", return_value=[]):
+                with patch.object(pipeline.github, "post_review") as mock_post:
+                    pipeline.run("https://github.com/neil/repo/pull/1")
+
+    pr, body, comments = mock_post.call_args[0]
+    assert comments == [(high, 1)]
+    assert "Low-severity findings (3)" in body
+    assert "- 2 × TODO" in body and "- 1 × Long line" in body
+    assert "Findings not attached" not in body   # LOW findings are no longer listed one by one
 
 def test_post_review_failure_becomes_warning():
     pipeline = AnalysisPipeline(skip_llm=True, post_review=True)
