@@ -43,6 +43,17 @@ def test_unclosed_string_runs_to_the_end_of_the_line():
     # the first line of a multi-line string: the rest of the line is text
     assert split_line('q = """SELECT eval(x)', ".py").code == f'q = """{blanks(14)}'   # pr-analyzer: ignore
 
+@pytest.mark.parametrize("line, extension, code", [
+    ('s = "a\\', ".py", 's = "  '),
+    ("s = 'a\\", ".py", "s = '  "),
+    ('const s = "a\\', ".js", 'const s = "  '),
+    ("const s = 'a\\", ".ts", "const s = '  "),
+])
+def test_a_string_ending_in_a_backslash_runs_to_the_end_of_the_line(line, extension, code):
+    # the backslash continues the string on the next line; such a string used to go unrecognised,
+    # so what it held was read as code
+    assert split_line(line, extension).code == code
+
 @pytest.mark.parametrize("line, extension", [
     ('a = "b"  # c', ".py"), ('f"{a:{b}} {c!r}"  # d', ".py"), ("`a ${b}` // c", ".js"),
 ])

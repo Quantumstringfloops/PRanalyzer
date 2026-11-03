@@ -242,6 +242,10 @@ def test_todo_used_as_a_name_is_not_flagged(line, filename):
 def test_todo_notes_next_to_code_punctuation_are_still_flagged(line, filename):
     assert rules_for(line, filename) == ["todo-comment"]
 
+def test_a_call_in_a_string_continued_on_the_next_line_is_not_flagged():
+    # a string ending in a backslash used to go unrecognised, so the call in it was read as code
+    assert rules_for('hint = "call print(x) to debug \\') == []
+
 @pytest.mark.parametrize("line, filename, rule", [
     ('f"{' * 21 + "x" + '}"' * 21 + ";print(y)", "calc.py", "print-call"),
     ("`${" * 21 + "x" + "}`" * 21 + ";console.log(y)", "view.js", "console-log"),
@@ -305,6 +309,16 @@ def test_a_long_generated_line_is_checked_quickly():
     rules = rules_for(line, "table.js")
     assert time.perf_counter() - start < 1
     assert rules == ["long-line"]
+
+def test_a_long_subscript_is_checked_quickly():
+    # the "[" that explains a number, and a "]" closing it, were looked for in all the text before
+    # the number: a subscript of 64,000 numbers took seconds. Past the 120 characters searched, a
+    # number isn't explained by the "[".
+    line = "x = table[" + ", ".join(str(37 + i % 50) for i in range(64000)) + "]"
+    start = time.perf_counter()
+    rules = rules_for(line)
+    assert time.perf_counter() - start < 1
+    assert rules == ["magic-number", "long-line"]
 
 def test_a_number_thousands_of_digits_long_does_not_crash():
     # int() refuses more than 4,300 digits: the ValueError stopped the whole analysis
