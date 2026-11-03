@@ -244,7 +244,7 @@ The values shown are the defaults. Severities can be written in any case.
 - A trailing `/` matches directories only, and a pattern that matches a directory covers every file in it.
 - Every other character matches itself, case-sensitively, `#` and spaces included (a `.gitignore` would read a leading `#` as a comment and drop trailing spaces).
 
-Negation (a leading `!`), `[` and `]` (character classes), backslashes (escapes) and `**` inside a name before a `/` (like `foo**/bar`, which git itself reads inconsistently) make the file invalid, rather than silently matching something other than what a `.gitignore` would. The report notes which files were skipped.
+Negation (a leading `!`), `[` and `]` (character classes), backslashes (escapes), a doubled slash (`//`) and `**` inside a name before a `/` (like `foo**/bar`, which git itself reads inconsistently) make the file invalid, rather than silently matching something other than what a `.gitignore` would. The report notes which files were skipped.
 
 **Rule ids.** Each finding's id is in the JSON report (`"rule"`), and the review summary shows it next to each counted rule.
 

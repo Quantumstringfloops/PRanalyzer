@@ -76,6 +76,9 @@ _UNSUPPORTED = (
     (re.compile(r"[^/*]\*{2,}/[^/]"), "has ** inside a name before a /, which isn't supported: "
                                       "write foo*/bar for one directory, or foo*/**/bar for any "
                                       "number"),
+    # glob_regex drops every / at either end, where git drops one and then matches nothing; and
+    # in foo**//bar, which slips past the check above, git's ** crosses directories
+    (re.compile(r"//"), "has //, which isn't supported: write a single /"),
 )
 
 

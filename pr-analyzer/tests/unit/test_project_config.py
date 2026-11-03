@@ -283,18 +283,32 @@ def test_ignores_checks_every_pattern():
     ("docs\\api", "'docs\\\\api' uses a backslash, which isn't supported"),
     ("\\#notes.md", "'\\\\#notes.md' uses a backslash"),
     ("foo**/bar", "'foo**/bar' has ** inside a name before a /, which isn't supported"),
+    # git strips one / at either end and then matches nothing, where ignore_paths stripped
+    # every one
+    ("tests//", "'tests//' has //, which isn't supported"),
+    ("//vendor", "'//vendor' has //, which isn't supported"),
+    ("docs/**//", "'docs/**//' has //, which isn't supported"),
+    ("a**//b", "'a**//b' has //, which isn't supported"),    # git's ** crosses directories here
+    ("a//b", "'a//b' has //, which isn't supported"),
 ])
 def test_unsupported_gitignore_syntax_is_rejected(pattern, expected):
     toml = f"ignore_paths = ['docs/**', '{pattern}']"
     assert f"ignore_paths: {expected}" in problems(toml)
 
+def test_doubled_slash_is_rejected_rather_than_read_as_one():
+    # fixtures// used to leave out tests/fixtures/settings.py, which git doesn't ignore
+    config, problems = read_project_config("ignore_paths = ['fixtures//']")
+    assert problems == ["ignore_paths: 'fixtures//' has //, which isn't supported: write a single /"]
+    assert not config.ignores("tests/fixtures/settings.py")
+
 def test_unsupported_patterns_say_what_to_write_instead():
-    message = problems("ignore_paths = ['!a', 'b[12]', 'c\\d', 'e**/f']")
+    message = problems("ignore_paths = ['!a', 'b[12]', 'c\\d', 'e**/f', 'g//']")
     assert "ignore_paths can only leave files out" in message
     assert "list each name, or use ? for any one character" in message
     assert "/ separates directories" in message
     assert "write foo*/bar for one directory, or foo*/**/bar for any number" in message
-    assert message.count("\n  - ") == 4
+    assert "write a single /" in message
+    assert message.count("\n  - ") == 5
 
 @pytest.mark.parametrize("pattern", [
     "docs/**", "**/fixtures/**", "/setup.py", "vendor/", "*.min.js", "**.min.js", "foo**bar",
