@@ -8,6 +8,7 @@ from pr_analyzer.project_config import (
     glob_regex,
     load_project_config,
     parse_project_config,
+    read_project_config,
     severity_rank,
 )
 
@@ -114,6 +115,33 @@ def test_every_problem_is_reported_at_once():
 def test_message_names_the_file_it_came_from():
     with pytest.raises(ConfigError, match=r"\.pr-analyzer\.toml on main is invalid"):
         parse_project_config("x = 1", source=".pr-analyzer.toml on main")
+
+# ── reading without stopping ──────────────────────────────────────────────────
+def test_read_returns_the_settings_and_no_problems():
+    assert read_project_config(b'disable = ["llm"]') == (ProjectConfig(disable=frozenset({"llm"})), [])
+
+def test_read_falls_back_to_the_defaults_and_names_every_problem():
+    # a broken file on the base branch used to stop every run; the caller now warns instead
+    config, problems = read_project_config('disabel = []\nblock_on = ["SEVERE"]')
+    assert config == ProjectConfig()
+    assert problems == [
+        "unknown key 'disabel' (did you mean 'disable'?)",
+        "block_on: 'SEVERE' is not a severity; use one of LOW, MEDIUM, HIGH, CRITICAL",
+    ]
+
+def test_read_applies_no_part_of_an_invalid_file():
+    # the valid half of a broken file isn't what the project chose either
+    config, _ = read_project_config('block_on = ["CRITICAL"]\ndisable = ["magic-numbers"]')
+    assert config == ProjectConfig()
+
+@pytest.mark.parametrize("raw, problem", [
+    (b"\xff\xfe", "the file is not UTF-8 text"),
+    ('disable = ["llm"', "the file is not valid TOML: "),
+])
+def test_read_names_files_that_cannot_be_parsed(raw, problem):
+    config, problems = read_project_config(raw)
+    assert config == ProjectConfig()
+    assert [p[:len(problem)] for p in problems] == [problem]
 
 # ── ignore_paths ──────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("pattern, path, expected", [

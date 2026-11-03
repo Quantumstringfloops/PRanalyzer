@@ -178,13 +178,22 @@ The values shown are the defaults. Severities can be written in any case.
 
 **Where it is read from.** When a PR is analysed, `.pr-analyzer.toml` is read from the PR's **base branch** through the GitHub API, never from the PR itself, so a PR can't loosen its own checks; a change to the file takes effect once it is merged. A file in the current directory is never picked up (in CI that is the PR's own checkout). `--config PATH` uses a local file instead. No file means the defaults.
 
-**Validation.** Unknown keys, unknown rule ids, bad severities, unsupported `ignore_paths` patterns and thresholds that aren't positive whole numbers are errors: the run stops with exit code 2 and a message listing every problem, with a suggestion for likely typos:
+**Validation.** Unknown keys, unknown rule ids, bad severities, unsupported `ignore_paths` patterns and thresholds that aren't positive whole numbers make the file invalid. Every problem is named, with a suggestion for likely typos, and what happens next depends on where the file came from:
 
-```
-Configuration error: .pr-analyzer.toml on main is invalid:
-  - unknown key 'disabel' (did you mean 'disable'?)
-  - disable: unknown rule id 'magic-numbers' (did you mean 'magic-number'?)
-```
+- **An invalid file on the base branch** doesn't stop the run. The file is ignored, the PR is analysed with the default settings, and a warning names the problems in the report, in the review's notes and on stderr:
+
+  ```
+  .pr-analyzer.toml on main is invalid, so the default settings were used: disable: unknown rule id 'magic-numbers' (did you mean 'magic-number'?)
+  ```
+
+  To recover, fix the file in a PR to that branch. That PR is analysed with the defaults like any other; once it is merged, the project's settings apply again.
+- **An invalid `--config` file** stops the run with exit code 2 before anything is fetched:
+
+  ```
+  Configuration error: settings.toml is invalid:
+    - unknown key 'disabel' (did you mean 'disable'?)
+    - disable: unknown rule id 'magic-numbers' (did you mean 'magic-number'?)
+  ```
 
 **`ignore_paths` patterns** use a subset of `.gitignore` syntax, matched the way git matches it:
 

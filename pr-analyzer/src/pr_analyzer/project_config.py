@@ -13,7 +13,9 @@
 
 Every key is optional. When a PR is analysed the file is read from the PR's base branch, never
 from the PR itself, so a PR can't loosen its own checks; `--config PATH` names a local file
-instead. A missing file means the defaults; an invalid one is an error that names every problem.
+instead. A missing file means the defaults. An invalid --config file is an error that names every
+problem. An invalid file on the base branch is ignored for the defaults, with a warning, so it
+can't stop every PR, the one that fixes it included.
 """
 import dataclasses
 import difflib
@@ -114,19 +116,27 @@ def load_project_config(path: str | Path) -> ProjectConfig:
 
 
 def parse_project_config(raw: bytes | str, source: str = CONFIG_FILE) -> ProjectConfig:
+    """Settings the run must use, such as a --config file: any problem is an error naming all."""
+    config, problems = read_project_config(raw)
+    if problems:
+        raise ConfigError(f"{source} is invalid:\n" + "\n".join(f"  - {p}" for p in problems))
+    return config
+
+
+def read_project_config(raw: bytes | str) -> tuple[ProjectConfig, list[str]]:
+    """The settings in a file and every problem with it. With any problem the settings are the
+    defaults: the valid part of a broken file isn't what the project chose either."""
     try:
         text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
         data = tomllib.loads(text)
-    except UnicodeDecodeError as e:
-        raise ConfigError(f"{source} is not UTF-8 text") from e
+    except UnicodeDecodeError:
+        return ProjectConfig(), ["the file is not UTF-8 text"]
     except tomllib.TOMLDecodeError as e:
-        raise ConfigError(f"{source} is not valid TOML: {e}") from e
+        return ProjectConfig(), [f"the file is not valid TOML: {e}"]
 
     problems: list[str] = []
     values = _validate(data, problems)
-    if problems:
-        raise ConfigError(f"{source} is invalid:\n" + "\n".join(f"  - {p}" for p in problems))
-    return ProjectConfig(**values)
+    return (ProjectConfig() if problems else ProjectConfig(**values)), problems
 
 
 def _validate(data: dict[str, Any], problems: list[str]) -> dict[str, Any]:
