@@ -107,6 +107,13 @@ def test_named_constant_is_not_a_magic_number():
     assert analyzer.analyze([constant]) == []
     assert any(s.title == "Possible magic number" for s in analyzer.analyze([literal]))
 
+def test_missing_return_type_not_flagged_in_tests():
+    # every test function used to get its own comment, burying the findings that matter
+    source = make_file("@@ -0,0 +1,1 @@\n+def handler(x):", filename="app.py")
+    test = make_file("@@ -0,0 +1,1 @@\n+def test_handler():", filename="tests/test_app.py")
+    assert any(s.title == "Function missing return type hint" for s in analyzer.analyze([source]))
+    assert analyzer.analyze([test]) == []
+
 def test_hardcoded_secret_left_to_security_scanner():
     # the static and security scanners both used to flag this, penalising it twice
     file = make_file('@@ -0,0 +1,1 @@\n+password = "hunter22"', filename="app.py")

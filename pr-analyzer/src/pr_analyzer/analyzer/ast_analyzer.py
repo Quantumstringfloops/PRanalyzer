@@ -122,6 +122,8 @@ PATTERNS: list[dict[str, Any]] = [
         "regex": re.compile(r"^\s*(async\s+)?def\s+\w+\s*\([^)]*\)\s*:"),
         "extensions": PYTHON,
         "skip_comments": True,
+        # test functions rarely annotate a return type; flagging each one buried real findings
+        "skip_tests": True,
         "severity": "LOW",
         "category": "style",
         "title": "Function missing return type hint",
