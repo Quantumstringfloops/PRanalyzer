@@ -8,7 +8,7 @@ from rich.text import Text
 from typer.testing import CliRunner
 
 from pr_analyzer import cli
-from pr_analyzer.exceptions import InvalidPRURLError, PrivateRepoError, RateLimitError
+from pr_analyzer.exceptions import ConfigError, InvalidPRURLError, PrivateRepoError, RateLimitError
 from pr_analyzer.models import AnalysisResult, PRSummary, QualityScore
 
 URL = "https://github.com/neil/repo/pull/1"
@@ -125,6 +125,47 @@ def test_unknown_output_format_rejected(pipeline):
     assert result.exit_code == 2
     assert pipeline.instances == []
 
+# ── --config ──────────────────────────────────────────────────────────────────
+def test_config_file_reaches_the_pipeline(pipeline, tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text('disable = ["magic-number"]\n', encoding="utf-8")
+
+    result = invoke("--config", str(path))
+
+    assert result.exit_code == 0
+    assert pipeline.instances[0].project_config.disable == {"magic-number"}
+
+def test_invalid_config_file_exits_2_before_any_analysis(pipeline, tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text('disable = ["magic-numbers"]\n', encoding="utf-8")
+
+    result = invoke("--config", str(path))
+
+    assert result.exit_code == 2
+    assert "Configuration error" in result.stderr
+    assert "did you mean 'magic-number'?" in result.stderr
+    assert pipeline.instances == []
+
+def test_missing_config_file_exits_2(pipeline, tmp_path):
+    result = invoke("--config", str(tmp_path / "missing.toml"))
+    assert result.exit_code == 2
+    assert "Can't read" in result.stderr
+
+def test_config_in_the_current_directory_is_not_used(pipeline, tmp_path, monkeypatch):
+    # in CI the current directory is the PR's own checkout, which could loosen its own checks
+    (tmp_path / ".pr-analyzer.toml").write_text('disable = ["semgrep"]\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    invoke()
+
+    assert getattr(pipeline.instances[0], "project_config", None) is None
+
+def test_invalid_base_branch_config_exits_2(pipeline):
+    pipeline.error = ConfigError(".pr-analyzer.toml on main is invalid:\n  - unknown key 'x'")
+    result = invoke()
+    assert result.exit_code == 2
+    assert "Configuration error: .pr-analyzer.toml on main is invalid" in result.stderr
+
 # ── help and version ──────────────────────────────────────────────────────────
 def test_help_works():
     # --help used to crash with TypeError under the locked Click
@@ -139,3 +180,24 @@ def test_version():
     result = runner.invoke(cli.app, ["version"])
     assert result.exit_code == 0
     assert result.stdout.startswith("pr-analyzer ")
+
+def test_version_comes_from_the_pypi_distribution(monkeypatch):
+    # the package is published as "pranalyzer"; the old lookup name would always say "unknown"
+    seen = []
+
+    def fake_version(name):
+        seen.append(name)
+        return "9.9.9"
+
+    monkeypatch.setattr(cli.importlib.metadata, "version", fake_version)
+    result = runner.invoke(cli.app, ["version"])
+
+    assert seen == ["pranalyzer"]
+    assert result.stdout.startswith("pr-analyzer 9.9.9")
+
+def test_version_when_not_installed(monkeypatch):
+    def not_installed(name):
+        raise cli.importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(cli.importlib.metadata, "version", not_installed)
+    assert runner.invoke(cli.app, ["version"]).stdout.startswith("pr-analyzer unknown")

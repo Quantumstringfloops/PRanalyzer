@@ -4,47 +4,38 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-permissions:
-  pull-requests: write
-  contents: read
+# nothing by default; the one job below asks for what it needs
+permissions: {}
 
 # a newer push to the same PR replaces a run that's still going
 concurrency:
   group: pr-analysis-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-defaults:
-  run:
-    working-directory: pr-analyzer
-
 jobs:
   analyze:
+    name: Analyze the pull request
     # PRs from forks get a read-only token and no secrets, so they can't be reviewed
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write   # post the review and its inline comments
+      contents: read         # read the PR's files and the base branch's .pr-analyzer.toml
 
     # actions are pinned to commits, since a tag can be moved to different code; the comment
     # names the release
     steps:
+      # the checkout is only there so `uses: ./` finds this repository's action.yml: every PR
+      # here runs the action, and the code, that it changes
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
-          python-version: "3.12"
-
-      - name: Install Poetry
-        run: pip install "poetry>=2,<3"
-
-      - name: Install dependencies
-        run: poetry install --no-interaction --only main --extras "openai security"
+          persist-credentials: false
 
       - name: Run PR Analyzer
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: ./
+        with:
           # without an OPENAI_API_KEY secret the LLM review is skipped with a warning
-          LLM_PROVIDER: openai
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: poetry run pr-analyzer analyze "$PR_URL" --post-review --fail-on-block
+          llm-provider: openai
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          extras: security,openai

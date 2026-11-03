@@ -3640,5 +3640,5 @@ security = ["pip-audit", "semgrep"]
 
 [metadata]
 lock-version = "2.1"
-python-versions = "^3.11"
-content-hash = "3919e2b598d32ff942ec0d6226ab04abb2d62e603142258535e958cbbf0589b5"
+python-versions = ">=3.11,<4.0"
+content-hash = "0a45eae6aa96fea7b7f1a8467622eec0b244d0bcabc568c831130fff65555e89"

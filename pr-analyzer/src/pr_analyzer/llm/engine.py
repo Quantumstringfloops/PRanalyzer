@@ -29,6 +29,8 @@ CATEGORY_ALIASES = {
 }
 # keys a model might wrap its list of suggestions in
 WRAPPER_KEYS = ("suggestions", "issues", "findings", "results", "comments")
+# the stage's id in .pr-analyzer.toml
+LLM_RULE = "llm"
 
 
 class LLMEngine:
@@ -75,7 +77,7 @@ class LLMEngine:
             import openai
         except ImportError as e:
             raise LLMError("LLM_PROVIDER=openai needs the openai package: "
-                           "pip install 'pr-analyzer[openai]'") from e
+                           "pip install 'pranalyzer[openai]'") from e
         if not settings.openai_api_key:
             raise LLMError("OPENAI_API_KEY is not set")
 
@@ -105,7 +107,7 @@ class LLMEngine:
             import anthropic
         except ImportError as e:
             raise LLMError("LLM_PROVIDER=anthropic needs the anthropic package: "
-                           "pip install 'pr-analyzer[anthropic]'") from e
+                           "pip install 'pranalyzer[anthropic]'") from e
         if not settings.anthropic_api_key:
             raise LLMError("ANTHROPIC_API_KEY is not set")
 
@@ -223,24 +225,26 @@ class LLMEngine:
         if category not in CATEGORIES:
             category = "style"
 
-        line = item.get("line", item.get("line_start"))
-        try:
-            line = int(line) if line is not None else None
-        except (TypeError, ValueError):
-            line = None
-        if line is not None and line < 1:
-            line = None
-
         return Suggestion(
             filename=filename,
             severity=severity,
             category=category,
             title=title[:200],
             description=str(item.get("description") or "").strip()[:2000],
-            line=line,
+            line=self._line_number(item),
             source="llm",
             confidence=confidence,
+            rule_id=LLM_RULE,
         )
+
+    @staticmethod
+    def _line_number(item: dict) -> int | None:
+        line = item.get("line", item.get("line_start"))
+        try:
+            line = int(line) if line is not None else None
+        except (TypeError, ValueError):
+            return None
+        return line if line is not None and line >= 1 else None
 
     @staticmethod
     def _match_filename(name, pr: PRSummary) -> str | None:

@@ -82,6 +82,12 @@ def test_findings_use_real_filenames_and_rule_severity(fake_semgrep):
         ("app.py", 3, "LOW", "Semgrep: print-call"),
     ]
 
+def test_findings_carry_the_stage_rule_id(fake_semgrep):
+    # .pr-analyzer.toml switches the whole Semgrep stage off with this id
+    fake_semgrep(stdout=sarif([result("python.eval-detected", "app.py", 2)]))
+    [found] = SemgrepRunner().scan([make_file("app.py")])
+    assert found.rule_id == "semgrep"
+
 def test_findings_on_unchanged_lines_dropped(fake_semgrep):
     fake_semgrep(stdout=sarif([result("eval-detected", "app.py", 5)], [rule("eval-detected", "error")]))
     assert SemgrepRunner().scan([make_file("app.py")]) == []

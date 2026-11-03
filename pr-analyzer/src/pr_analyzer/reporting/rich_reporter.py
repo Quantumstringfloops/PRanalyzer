@@ -64,6 +64,7 @@ class RichReporter:
                     "description": s.description,
                     "source":      s.source,
                     "confidence":  s.confidence,
+                    "rule":        s.rule_id,   # the id .pr-analyzer.toml can disable
                 }
                 for s in result.suggestions
             ],

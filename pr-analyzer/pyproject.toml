@@ -1,38 +1,67 @@
-[tool.poetry]
-name = "pr-analyzer"
+[project]
+# published as "pranalyzer"; the command stays `pr-analyzer` and the import package `pr_analyzer`
+name = "pranalyzer"
 version = "0.1.0"
-description = "AI-powered pull request analyzer"
-authors = ["Neil Mathew"]
+description = "Score GitHub pull requests with static analysis, security scanning and an optional LLM review"
+authors = [{ name = "Neil Mathew" }]
+license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.md"
+requires-python = ">=3.11"
+keywords = [
+    "github", "pull-request", "code-review", "static-analysis", "security", "semgrep", "llm", "ci",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+    "pygithub>=2.3,<3",
+    # Typer 0.27+ no longer depends on Click. 0.12 broke on Click >= 8.2: --help crashed and
+    # boolean flags parsed as strings or None.
+    "typer>=0.27,<0.28",
+    "rich>=13.8,<14",
+    "pydantic-settings>=2.3,<3",
+    "python-dotenv>=1.0,<2",
+    "structlog>=24.2,<25",
+    "httpx>=0.27,<0.28",
+    "tree-sitter>=0.25,<0.26",
+    "tree-sitter-python>=0.25,<0.26",
+    "tree-sitter-javascript>=0.25,<0.26",
+    "tree-sitter-typescript>=0.23,<0.24",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.30,<4"]
+anthropic = ["anthropic>=0.28,<3"]
+security = ["semgrep>=1.181,<2", "pip-audit>=2.10,<3"]
+
+[project.scripts]
+pr-analyzer = "pr_analyzer.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/Quantumstringfloops/PRanalyzer"
+Repository = "https://github.com/Quantumstringfloops/PRanalyzer"
+Issues = "https://github.com/Quantumstringfloops/PRanalyzer/issues"
+
+[tool.poetry]
+# older Poetry 2 releases can't read the PEP 639 license fields above
+requires-poetry = ">=2.2"
+# the import package doesn't share the distribution's name, so Poetry can't find it on its own
 packages = [{ include = "pr_analyzer", from = "src" }]
 
 [tool.poetry.dependencies]
-python = "^3.11"
-pygithub = "^2.3"
-# Typer 0.27+ no longer depends on Click. 0.12 broke on Click >= 8.2: --help crashed and
-# boolean flags parsed as strings or None.
-typer = "^0.27"
-rich = "^13.8"
-pydantic-settings = "^2.3"
-python-dotenv = "^1.0"
-structlog = "^24.2"
-httpx = "^0.27"
-tree-sitter = "^0.25"
-tree-sitter-python = "^0.25"
-tree-sitter-javascript = "^0.25"
-tree-sitter-typescript = "^0.23"
-openai = { version = ">=1.30,<4", optional = true }
-anthropic = { version = ">=0.28,<3", optional = true }
-semgrep = { version = "^1.181", optional = true }
-pip-audit = { version = "^2.10", optional = true }
-
-[tool.poetry.extras]
-openai = ["openai"]
-anthropic = ["anthropic"]
-security = ["semgrep", "pip-audit"]
-
-[tool.poetry.scripts]
-pr-analyzer = "pr_analyzer.cli:app"
+# Locking only: the lock must work for every Python allowed, and pip-audit's cyclonedx-python-lib
+# dependency declares Python < 4. The published metadata keeps requires-python = ">=3.11".
+python = ">=3.11,<4.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"
@@ -48,5 +77,6 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [build-system]
-requires = ["poetry-core"]
+# poetry-core 2.2 added PEP 639: an SPDX `license` string and `license-files`
+requires = ["poetry-core>=2.2,<3"]
 build-backend = "poetry.core.masonry.api"

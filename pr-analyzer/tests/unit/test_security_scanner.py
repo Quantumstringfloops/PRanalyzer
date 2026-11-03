@@ -1,5 +1,5 @@
 import pytest
-from pr_analyzer.security.scanner import SecurityScanner
+from pr_analyzer.security.scanner import RULE_IDS, SecurityScanner
 from pr_analyzer.models import FileChange, Suggestion
 
 def make_file(patch: str, status: str = "modified", filename: str = "test.py") -> FileChange:
@@ -157,6 +157,31 @@ def test_debug_mode_no_match():
     file = make_file(added("DEBUG = False"))
     assert scanner.scan([file]) == []
 
+@pytest.mark.parametrize("code", [
+    'msg = "never call eval(x) on input"',  # pr-analyzer: ignore
+    "x = load(f)  # not pickle.load(f)",  # pr-analyzer: ignore
+    "hint = 'use yaml.load(data, Loader=SafeLoader)'",  # pr-analyzer: ignore
+    'doc = "subprocess.run(cmd, shell=True) is unsafe"',  # pr-analyzer: ignore
+    'flag = "--debug=True"',
+])
+def test_calls_inside_strings_and_comments_are_not_flagged(code):
+    assert scanner.scan([make_file(added(code))]) == []
+
+def test_js_comment_after_code_is_not_flagged():
+    file = make_file(added("run(); // eval(x) was here"), filename="app.js")  # pr-analyzer: ignore
+    assert scanner.scan([file]) == []
+
+def test_a_call_after_a_string_is_still_flagged():
+    assert titles(make_file(added('x = "a"; eval(y)'))) == ["eval() usage detected"]  # pr-analyzer: ignore
+
+def test_secrets_are_still_found_in_comments():
+    file = make_file(added('x = 1  # password = "hunter22"'))  # pr-analyzer: ignore
+    assert titles(file) == ["Hardcoded password"]
+
+def test_sql_string_with_inner_quotes_is_still_flagged():
+    code = "cur.execute(\"SELECT * FROM t WHERE name = '%s'\" % name)"  # pr-analyzer: ignore
+    assert "Possible SQL injection" in titles(make_file(added(code)))
+
 def test_dangerous_patterns_only_in_source_files():
     docs = make_file(added("Never call eval(input) on user data."), filename="README.md")  # pr-analyzer: ignore
     assert scanner.scan([docs]) == []
@@ -221,3 +246,24 @@ def test_tool_findings_and_warnings_are_collected():
 
     assert results == [finding]
     assert scanner_with_tools.warnings == ["Dependency audit skipped: pip-audit is not installed"]
+
+# ── rule ids and disabling ────────────────────────────────────────────────────
+def test_rule_ids_are_unique():
+    assert len(RULE_IDS) == len(set(RULE_IDS))
+
+def test_findings_carry_their_rule_id():
+    file = make_file(added('password = "supersecret"'))  # pr-analyzer: ignore
+    assert [s.rule_id for s in scanner.scan([file])] == ["hardcoded-password"]
+
+def test_disabled_patterns_are_skipped():
+    file = make_file(added("eval(user_input)  # api_key = 'abcdefghijklmnop'"))  # pr-analyzer: ignore
+    assert [s.rule_id for s in scanner.scan([file], disabled={"eval"})] == ["hardcoded-api-key"]
+
+def test_disabled_tools_do_not_run():
+    semgrep, auditor = FakeRunner(warnings=["Semgrep scan skipped"]), FakeRunner()
+    scanner_with_tools = SecurityScanner(semgrep=semgrep, dep_auditor=auditor)
+
+    scanner_with_tools.scan([make_file(added("x = 1"))], disabled={"semgrep", "dependency-audit"})
+
+    assert (semgrep.calls, auditor.calls) == (0, 0)
+    assert scanner_with_tools.warnings == []
