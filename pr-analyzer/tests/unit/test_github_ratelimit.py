@@ -1,8 +1,11 @@
 import functools
 import gzip
+import importlib.util
 import io
 import json
+import sys
 import threading
+import types
 
 import github
 import pytest
@@ -133,6 +136,20 @@ def test_other_threads_hold_back_while_one_waits():
     pause.wait_if_paused()                 # the limit has reset
 
     assert sleeps == [30, 20]
+
+# ── urllib3 1.26 ──────────────────────────────────────────────────────────────
+def test_imports_with_urllib3_1_26(monkeypatch):
+    # PyGithub and requests still allow urllib3 1.26, which has no BaseHTTPResponse: importing
+    # it broke every command
+    old = types.ModuleType("urllib3.response")
+    old.HTTPResponse = HTTPResponse
+    monkeypatch.setitem(sys.modules, "urllib3.response", old)
+
+    spec = importlib.util.find_spec("pr_analyzer.github.ratelimit")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.github_retry(60).max_wait == 60
 
 # ── through PyGithub, requests and urllib3 ────────────────────────────────────
 class FakeAPI:

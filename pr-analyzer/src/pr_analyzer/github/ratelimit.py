@@ -16,21 +16,27 @@ whatever it says (up to six hours, silently). It ignores 429, retries 5xx errors
 logging module, which this project doesn't show. The plain urllib3 Retry used before had the
 same silent Retry-After sleep on 429 and 503 responses.
 """
+from __future__ import annotations
+
 import json
 import math
 import threading
 import time
 from collections.abc import Callable, Mapping
 from types import TracebackType
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
 import structlog
 from github import RateLimitExceededException
 from github.Requester import Requester
-from urllib3.connectionpool import ConnectionPool
 from urllib3.exceptions import MaxRetryError
-from urllib3.response import BaseHTTPResponse
 from urllib3.util.retry import Retry
+
+if TYPE_CHECKING:
+    # annotations only: BaseHTTPResponse is new in urllib3 2, and PyGithub and requests still
+    # allow urllib3 1.26
+    from urllib3.connectionpool import ConnectionPool
+    from urllib3.response import BaseHTTPResponse
 
 log = structlog.get_logger(__name__)
 
