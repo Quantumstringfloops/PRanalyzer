@@ -75,6 +75,8 @@ Permission to rewrite modules and the added scalability requirements don't chang
 - 2026-11-03: **Workflow actions pinned by commit** (`d7d5f9e`), at the user's request:
   - `actions/checkout` v7.0.1 and `actions/setup-python` v7.1.0. Both run on Node 24, and nothing in their release notes affects these workflows.
   - With real Semgrep, the local bot preview now predicts 79.0 (C+), passed, with 3 inline comments. The 4 Semgrep notes about movable tags are gone.
+  - On PR #3 (`5318f56`), CI on Python 3.11 and 3.12 and the bot all passed, and GitHub no longer warns about Node 20. The bot edited its tagged summary to 79.0 (C+), and its 4 Semgrep comments now show as outdated.
+- 2026-11-03: **PR #3's description updated**, at the user's request, through the browser pane. It now covers the review fix, the pinned actions, 217 tests and the bot's actual result.
 
 ## Work Remaining
 
@@ -91,6 +93,6 @@ Permission to rewrite modules and the added scalability requirements don't chang
 
 **Do not start or resume a production build from this file.** The gate failed.
 
-PR #3 (https://github.com/Quantumstringfloops/PRanalyzer/pull/3) is open from `fix/working-cli`, and the bot's behaviour on repeat runs is verified. Check that CI and the bot pass with the pinned actions from `d7d5f9e`. After that, merging is the user's call. The remaining follow-ups are under Work Remaining.
+PR #3 (https://github.com/Quantumstringfloops/PRanalyzer/pull/3) is open from `fix/working-cli`, with all checks passing and an up-to-date description. Merging it is the user's call. The remaining follow-ups are under Work Remaining.
 
 If the user changes the preconditions above and explicitly asks, re-run the gate.
