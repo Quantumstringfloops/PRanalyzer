@@ -51,12 +51,21 @@ Permission to rewrite modules and the added scalability requirements don't chang
   - Opening it runs the PR Analysis workflow for the first time. Running the analyzer's static and security stages on the branch's own diff predicts **44.0, F, blocked, with 237 inline review comments**.
   - 164 of those comments are "Function missing return type hint" on test functions.
   - All 6 CRITICAL and 11 HIGH findings are deliberate fake secrets and unsafe-code samples in the scanner's own tests.
+- 2026-11-03: **PR bot quieted**, as the user chose, in commits `18386e1`, `78ec0be`, `f87299c` and `10f1e5b`:
+  - the return-type rule skips test files;
+  - inline comments go only on MEDIUM and above, and LOW findings are counted in the review body;
+  - a new `pr-analyzer: ignore` line marker is applied to the 40 deliberate sample lines in the tests.
+  - The same local preview now predicts **passed, 67.8 (D), 7 inline comments**.
+- 2026-11-03: A PR for the branch, #2 (default title "Fix/working cli"), was opened on GitHub and closed 12 seconds later, unmerged. Both workflows then ran on the old head `33f705a`:
+  - The bot's job exited 1 (blocked) and left no review.
+  - CI's test step failed because Typer adds colour codes on GitHub Actions. That is fixed in `ada3362`.
+  - Locally, 211 tests pass, including from a clean export with Actions' environment variables.
 
 ## Work Remaining
 
 - **Production build:** none. The gate stopped it.
 - **Free-CLI track:**
-  - open the pull request (the branch is pushed; see Next Step);
+  - open a new pull request (#2 is closed; see Next Step);
   - publish to PyPI or as a GitHub Action;
   - optionally purge the leaked `.env` from git history (a force-push to a public repo; only after the keys are rotated, and only with explicit approval).
 - **User actions:**
@@ -65,9 +74,11 @@ Permission to rewrite modules and the added scalability requirements don't chang
 
 ## Next Step
 
-**Do not start or resume a production build from this file.** The gate failed. `fix/working-cli` is pushed, but the pull request is not open. Wait for the user to choose between two options:
+**Do not start or resume a production build from this file.** The gate failed. Every commit on `fix/working-cli` is pushed, but no pull request is open; #2 was closed unmerged.
 
-- quiet the PR bot first: skip the return-type rule in test files, post inline comments only for MEDIUM and above, and add an inline marker that suppresses deliberate test fixtures;
-- open the pull request as it is.
+The browser pane isn't signed in to GitHub, and `gh` isn't installed. Wait for the user to do one of two things:
 
-Then open it, bind it, and record the link here. If the user changes the preconditions above and explicitly asks, re-run the gate.
+- sign in to GitHub in the browser pane, so the PR can be opened from GitHub's web form;
+- open the PR themselves at https://github.com/Quantumstringfloops/PRanalyzer/compare/main...fix/working-cli?expand=1.
+
+Then bind the PR, read its CI, and record the link here. If the user changes the preconditions above and explicitly asks, re-run the gate.
