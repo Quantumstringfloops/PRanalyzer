@@ -1,4 +1,5 @@
 import re
+import time
 
 import pytest
 from tree_sitter import Parser
@@ -256,6 +257,22 @@ def test_preprocessor_lines_are_not_magic_numbers(line, filename):
 
 def test_php_hash_comment_is_a_comment():
     assert rules_for("# TODO: remove this hack", "index.php") == ["todo-comment"]
+
+# ── long lines ────────────────────────────────────────────────────────────────
+def test_a_long_generated_line_is_checked_quickly():
+    # each number here is explained by the key before it, which was looked for by searching the
+    # line again from its start: 8,000 entries took 7 seconds and 16,000 half a minute
+    line = "export default {" + ",".join(f'"k{i}":{37 + i % 50}' for i in range(8000)) + "};"
+    start = time.perf_counter()
+    rules = rules_for(line, "table.js")
+    assert time.perf_counter() - start < 1
+    assert rules == ["long-line"]
+
+def test_numbers_far_into_a_long_line_are_still_explained():
+    padding = "x = 1; " * 40
+    assert "magic-number" not in rules_for(padding + "fetch(url, timeout=37)")
+    assert "magic-number" not in rules_for(padding + "last = parts[-37]")
+    assert "magic-number" in rules_for(padding + "wait(37)")
 
 # ── rule ids ──────────────────────────────────────────────────────────────────
 def test_rule_ids_are_unique_and_kebab_case():

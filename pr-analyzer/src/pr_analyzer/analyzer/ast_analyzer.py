@@ -51,13 +51,17 @@ WELL_KNOWN_NUMBERS = frozenset({
 # `timeout=30`, `retries = 5`, `"port": 8080`, `{ port: 8080 }`: the name right before the number
 # says what it means. Comparisons (==, <=, ...) and augmented assignments (+=) don't name it.
 NAMED_BY = re.compile(r"(?:\b[A-Za-z_]\w*|[\"'\]])\s*(?::|(?<![=!<>+\-*/%&|^~:@])=)\s*[-+]?$")
+# How far before a number to look for the name or the `[` that explains it. A line of a usual
+# length is searched in full; searching a whole generated line again for each of its thousands of
+# numbers took minutes.
+NUMBER_CONTEXT = 120
 
 
 def in_subscript(code: str, pos: int) -> bool:
     """Whether `pos` is inside [...] that follows a name, a call or a string: an index or a slice
     such as `line[:72]` or `parts[-2]`, not a list literal."""
-    opening = code.rfind("[", 0, pos)
-    if opening < 1 or code.rfind("]", 0, pos) > opening:
+    opening = code.rfind("[", max(0, pos - NUMBER_CONTEXT), pos)
+    if opening < 1 or code.find("]", opening, pos) != -1:
         return False
     before = code[opening - 1]
     return before.isalnum() or before in "_)]\"'"
@@ -65,10 +69,11 @@ def in_subscript(code: str, pos: int) -> bool:
 
 def explained_number(code: str, match: re.Match[str]) -> bool:
     """A number a reader understands without a named constant."""
+    start = match.start()
     return (
         int(match.group()) in WELL_KNOWN_NUMBERS
-        or NAMED_BY.search(code, 0, match.start()) is not None
-        or in_subscript(code, match.start())
+        or NAMED_BY.search(code, max(0, start - NUMBER_CONTEXT), start) is not None
+        or in_subscript(code, start)
     )
 
 
