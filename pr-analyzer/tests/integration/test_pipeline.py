@@ -532,3 +532,56 @@ def test_unreadable_pr_config_is_noted():
     assert result.suggestions == []
     assert ("Could not check the .pr-analyzer.toml this PR changes: its content isn't available"
             in result.warnings)
+
+# ── a crafted .pr-analyzer.toml ───────────────────────────────────────────────
+# tomllib raises a plain ValueError for an integer of over 4300 digits, which used to stop the
+# run with "Unexpected error" and no report, wherever the file came from
+CRAFTED = "x = " + "1" * 5000
+CRAFTED_PROBLEM = "the file has an integer outside TOML's 64-bit range"
+CRAFTED_WARNING = (".pr-analyzer.toml on main is invalid, so the default settings were used: "
+                   f"{CRAFTED_PROBLEM}")
+
+def test_crafted_base_branch_config_falls_back_to_the_defaults():
+    result, _ = run_with_config(CRAFTED, make_insecure_pr())
+
+    assert [s.rule_id for s in result.suggestions] == ["hardcoded-password"]
+    assert result.warnings[0] == CRAFTED_WARNING
+
+def test_pr_adding_a_crafted_config_is_blocked():
+    result, _ = run_with_config("", make_pr_changing_config(CRAFTED, pr=make_insecure_pr()))
+
+    [config] = [s for s in result.suggestions if s.rule_id == "config"]
+    assert (config.severity, config.title) == ("HIGH", f"Invalid config: {CRAFTED_PROBLEM}")
+    assert "hardcoded-password" in {s.rule_id for s in result.suggestions}
+    assert result.passed is False
+
+@pytest.mark.parametrize("where", ["pr", "base branch"])
+def test_crafted_config_is_reported_through_the_cli(where, monkeypatch):
+    # the reproduction: the PR adds the file and a password, or the base branch has the file
+    pr = make_insecure_pr()
+    if where == "pr":
+        pr = make_pr_changing_config(CRAFTED, pr=pr)
+    base = CRAFTED.encode() if where == "base branch" else None
+    monkeypatch.setattr(GithubClient, "fetch_pr", lambda self, url: pr)
+    monkeypatch.setattr(GithubClient, "fetch_file", lambda self, repo, path, ref: base)
+
+    result = CliRunner().invoke(cli.app, ["analyze", URL, "--skip-llm", "--output", "json"])
+
+    assert result.exit_code == 1, result.stderr      # blocked, where it used to exit 2
+    report = json.loads(result.stdout)
+    rules = {s["rule"]: s for s in report["suggestions"]}
+    assert rules["hardcoded-password"]["severity"] == "CRITICAL"
+    if where == "pr":
+        assert rules["config"]["title"] == f"Invalid config: {CRAFTED_PROBLEM}"
+    else:
+        assert "config" not in rules and report["warnings"][0] == CRAFTED_WARNING
+
+def test_crafted_config_file_is_a_configuration_error(tmp_path, monkeypatch):
+    path = tmp_path / "settings.toml"
+    path.write_text(CRAFTED, encoding="utf-8")
+    monkeypatch.setattr(GithubClient, "fetch_pr", lambda self, url: make_pr())
+
+    result = CliRunner().invoke(cli.app, ["analyze", URL, "--skip-llm", "--config", str(path)])
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(f"Configuration error: {path} is invalid:\n  - {CRAFTED_PROBLEM}")

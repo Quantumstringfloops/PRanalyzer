@@ -218,7 +218,7 @@ The values shown are the defaults. Severities can be written in any case.
 
 **Where it is read from.** When a PR is analysed, `.pr-analyzer.toml` is read from the PR's **base branch** through the GitHub API, never from the PR itself, so a PR can't loosen its own checks; a change to the file takes effect once it is merged, and until then the PR's copy is only checked (see below). A file in the current directory is never picked up (in CI that is the PR's own checkout). `--config PATH` uses a local file instead. No file means the defaults.
 
-**Validation.** Unknown keys, unknown rule ids, bad severities, unsupported `ignore_paths` patterns and thresholds that aren't positive whole numbers make the file invalid. Every problem is named, with a suggestion for likely typos, and what happens next depends on where the file came from:
+**Validation.** Unknown keys, unknown rule ids, bad severities, unsupported `ignore_paths` patterns and thresholds that aren't positive whole numbers make the file invalid. Every problem is named, with a suggestion for likely typos. An integer outside TOML's 64-bit range, or tables or arrays nested more than 100 levels deep, make the file invalid as well, and its keys aren't checked then. What happens next depends on where the file came from:
 
 - **A PR that adds or changes `.pr-analyzer.toml`** has its copy checked, though not applied: each problem is a HIGH finding on the file, with the rule id `config`, so with the default `block_on` the PR is blocked until the file is valid. The check runs whatever `ignore_paths` says; `disable = ["config"]` on the base branch turns it off.
 - **An invalid file on the base branch** doesn't stop the run. The file is ignored, the PR is analysed with the default settings, and a warning names the problems in the report, in the review's notes and on stderr:
@@ -244,7 +244,7 @@ The values shown are the defaults. Severities can be written in any case.
 - A trailing `/` matches directories only, and a pattern that matches a directory covers every file in it.
 - Every other character matches itself, case-sensitively, `#` and spaces included (a `.gitignore` would read a leading `#` as a comment and drop trailing spaces).
 
-Negation (a leading `!`), `[` and `]` (character classes), backslashes (escapes) and `**` inside a name before a `/` (like `foo**/bar`, which git itself reads inconsistently) make the file invalid, rather than silently matching something other than what a `.gitignore` would. The report notes which files were skipped.
+Negation (a leading `!`), `[` and `]` (character classes), backslashes (escapes), a doubled slash (`//`) and `**` inside a name before a `/` (like `foo**/bar`, which git itself reads inconsistently) make the file invalid, rather than silently matching something other than what a `.gitignore` would. The report notes which files were skipped.
 
 **Rule ids.** Each finding's id is in the JSON report (`"rule"`), and the review summary shows it next to each counted rule.
 
