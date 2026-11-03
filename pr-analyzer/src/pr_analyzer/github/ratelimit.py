@@ -7,7 +7,9 @@ even a POST, can be sent again once the limit allows:
 - secondary limit: wait `retry-after` seconds, or a minute when GitHub doesn't say
 
 A wait longer than GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS raises RateLimitExceededException instead,
-which the client reports as RateLimitError (exit code 2), as before.
+which the client reports as RateLimitError (exit code 2), as before. Waits can be cancelled: when
+a parallel fetch fails or is interrupted (Ctrl-C), its waits end at once and none of its
+requests is sent again.
 
 This is a urllib3 Retry of our own rather than PyGithub's GithubRetry because GithubRetry (2.10)
 caps only primary-limit waits: a 403 with Retry-After falls through to urllib3, which sleeps for
@@ -91,33 +93,73 @@ def read_json(response: BaseHTTPResponse) -> Any:
         return {"data": text}
 
 
+class RequestsCancelled(Exception):
+    """Raised instead of waiting, retrying or sending a request once its fetch is cancelled."""
+
+
+class _Deadline:
+    """When the run's requests may go on, on the monotonic clock: shared by a pause and its
+    scopes."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.at = 0.0
+
+
 class RateLimitPause:
     """The rate-limit waits of one run, shared by all its GitHub clients and threads: while one
-    request waits for a limit to reset, the others hold back instead of adding to it."""
+    request waits for a limit to reset, the others hold back instead of adding to it.
+
+    Waits are on an Event rather than time.sleep, so cancel() ends them at once: Ctrl-C reaches
+    only the main thread, and nothing else could stop a worker thread's wait. Deadlines are on
+    the monotonic clock, which a change to the system time doesn't move; `clock` is the wall
+    clock that GitHub's reset times are read against."""
 
     def __init__(
         self,
-        sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.time,
+        monotonic: Callable[[], float] = time.monotonic,
+        new_event: Callable[[], threading.Event] = threading.Event,
     ):
-        self.sleep = sleep
         self.clock = clock
-        self._lock = threading.Lock()
-        self._until = 0.0
+        self.monotonic = monotonic
+        self.new_event = new_event
+        self.cancelled = new_event()
+        self._resume = _Deadline()
+
+    def scope(self) -> RateLimitPause:
+        """A pause with this one's waits but a cancel() of its own: one per parallel fetch, so
+        that ending the fetch stops its requests, not the client's later ones."""
+        scoped = RateLimitPause(self.clock, self.monotonic, self.new_event)
+        scoped._resume = self._resume
+        return scoped
+
+    def cancel(self) -> None:
+        """End every wait at once; from then on each wait, retry and request raises."""
+        self.cancelled.set()
+
+    def raise_if_cancelled(self) -> None:
+        if self.cancelled.is_set():
+            raise RequestsCancelled("the GitHub requests were cancelled")
+
+    def sleep(self, seconds: float) -> None:
+        """Wait `seconds` without holding back other requests, unless cancel() comes first."""
+        if seconds > 0 and not self.cancelled.is_set():
+            self.cancelled.wait(seconds)
+        self.raise_if_cancelled()
 
     def wait(self, seconds: float, **context: Any) -> None:
-        with self._lock:
-            now = self.clock()
-            self._until = max(self._until, now + seconds)
-            remaining = self._until - now
+        with self._resume.lock:
+            now = self.monotonic()
+            self._resume.at = max(self._resume.at, now + seconds)
+            remaining = self._resume.at - now
         log.info("github_rate_limit_wait", seconds=round(remaining, 1), **context)
         self.sleep(remaining)
 
     def wait_if_paused(self) -> None:
-        with self._lock:
-            remaining = self._until - self.clock()
-        if remaining > 0:
-            self.sleep(remaining)
+        with self._resume.lock:
+            remaining = self._resume.at - self.monotonic()
+        self.sleep(remaining)
 
 
 class RateLimitRetry(Retry):
@@ -154,6 +196,7 @@ class RateLimitRetry(Retry):
         _pool: ConnectionPool | None = None,
         _stacktrace: TracebackType | None = None,
     ) -> Self:
+        self.pause.raise_if_cancelled()   # a cancelled fetch sends nothing again, whatever failed
         if response is None or response.status not in RATE_LIMIT_STATUSES:
             return super().increment(method, url, response, error, _pool, _stacktrace)
 
@@ -179,7 +222,9 @@ class RateLimitRetry(Retry):
 
     def sleep(self, response: BaseHTTPResponse | None = None) -> None:
         if self.rate_limit_wait is None:
-            super().sleep(response)
+            # the back-off before retrying a server error or a lost connection (github_retry has
+            # urllib3 ignore their Retry-After), which cancel() cuts short too
+            self.pause.sleep(self.get_backoff_time())
             return
         last = self.history[-1] if self.history else None
         self.pause.wait(

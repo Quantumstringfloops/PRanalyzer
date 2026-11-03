@@ -18,10 +18,13 @@ from pr_analyzer.exceptions import (
     RateLimitError,
     RepositoryNotFoundError,
 )
+from pr_analyzer.github import client as client_module
 from pr_analyzer.github.client import GithubClient
 from pr_analyzer.models import PRSummary, Suggestion
 
 URL = "https://github.com/microsoft/vscode/pull/1"
+# a test that goes wrong waits this long for another thread, rather than hanging
+TIMEOUT = 5
 
 
 def make_file(filename="app.py", status="modified", patch="@@ -1,1 +1,1 @@\n+x = 1", sha=None):
@@ -228,6 +231,8 @@ class FakeRepo:
         self.threads.add(threading.get_ident())
         self.owner.requests.append((path, ref))
         result = self.contents[path]
+        if callable(result):
+            result = result()   # a request that takes its time
         if isinstance(result, BaseException):
             raise result
         if isinstance(result, threading.Barrier):
@@ -322,6 +327,39 @@ def test_rate_limit_in_a_worker_fails_the_fetch(fake_github):
     with pytest.raises(RateLimitError):
         GithubClient(token="t").fetch_pr(URL)
     assert all(c.closed for c in fake_github.clients[1:])
+
+def test_ctrl_c_ends_the_fetch_without_waiting_for_requests_in_flight(fake_github, monkeypatch):
+    # Ctrl-C reaches only the main thread, as KeyboardInterrupt while it waits for the workers.
+    # It used to wait for every request in flight, and its rate-limit waits, before stopping.
+    monkeypatch.setattr(settings, "github_max_workers", 2)
+    started, finish = threading.Semaphore(0), threading.Event()
+    in_flight = []
+
+    def slow():
+        in_flight.append(threading.current_thread())
+        started.release()
+        finish.wait(TIMEOUT)
+        return "x = 1\n"
+
+    for name in ("a.py", "b.py", "c.py", "d.py"):
+        fake_github.add(name, slow)
+
+    def ctrl_c(futures, return_when):
+        for _ in range(2):
+            assert started.acquire(timeout=TIMEOUT)   # both workers are busy
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(client_module, "wait", ctrl_c)
+    with pytest.raises(KeyboardInterrupt):
+        GithubClient(token="t").fetch_pr(URL)
+
+    workers = fake_github.clients[1:]
+    assert all(t.is_alive() for t in in_flight) and not finish.is_set()   # not waited for
+    assert len(workers) == 2 and all(w.closed for w in workers)
+    finish.set()
+    for thread in in_flight:
+        thread.join(TIMEOUT)
+    assert sorted(path for path, _ in fake_github.requests) == ["a.py", "b.py"]   # none queued
 
 # ── content cache ─────────────────────────────────────────────────────────────
 def test_cached_contents_are_not_fetched_again(fake_github, tmp_path):
