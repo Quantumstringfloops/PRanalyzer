@@ -7,9 +7,9 @@ even a POST, can be sent again once the limit allows:
 - secondary limit: wait `retry-after` seconds, or a minute when GitHub doesn't say
 
 A wait longer than GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS raises RateLimitExceededException instead,
-which the client reports as RateLimitError (exit code 2), as before. Waits can be cancelled: when
-a parallel fetch fails or is interrupted (Ctrl-C), its waits end at once and none of its
-requests is sent again.
+which the client reports as RateLimitError (exit code 2), as before. Waits are logged as
+warnings, and they can be cancelled: when a parallel fetch fails or is interrupted (Ctrl-C), its
+waits end at once and none of its requests is sent again.
 
 This is a urllib3 Retry of our own rather than PyGithub's GithubRetry because GithubRetry (2.10)
 caps only primary-limit waits: a 403 with Retry-After falls through to urllib3, which sleeps for
@@ -153,7 +153,8 @@ class RateLimitPause:
             now = self.monotonic()
             self._resume.at = max(self._resume.at, now + seconds)
             remaining = self._resume.at - now
-        log.info("github_rate_limit_wait", seconds=round(remaining, 1), **context)
+        # a warning, so the default log level shows it: the run can stand still for minutes
+        log.warning("github_rate_limit_wait", seconds=round(remaining, 1), **context)
         self.sleep(remaining)
 
     def wait_if_paused(self) -> None:

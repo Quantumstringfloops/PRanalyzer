@@ -10,6 +10,7 @@ import types
 import github
 import pytest
 from github import GithubException, RateLimitExceededException
+from structlog.testing import capture_logs
 from urllib3.connectionpool import HTTPConnectionPool
 from urllib3.response import HTTPResponse
 
@@ -221,6 +222,14 @@ def test_setting_the_system_clock_back_does_not_stretch_a_wait(clock):
     pause.wait_if_paused()
 
     assert clock.waits == [30, 20]
+
+def test_waits_are_logged_as_warnings(clock):
+    # the default log level is WARNING, and a run that stands still for minutes must say why
+    with capture_logs() as logs:
+        clock.pause().wait(30, status=429, url="/repos/o/r", attempt=1)
+
+    assert logs == [{"event": "github_rate_limit_wait", "log_level": "warning", "seconds": 30,
+                     "status": 429, "url": "/repos/o/r", "attempt": 1}]
 
 # ── cancelling the waits ──────────────────────────────────────────────────────
 def test_cancel_ends_the_waits_and_stops_the_retries(clock):
