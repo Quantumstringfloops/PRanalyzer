@@ -14,6 +14,7 @@ request's files, so every request is laid out, and guarded, like a single one.
 """
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass, replace
 
 from pr_analyzer.llm.prompts import build_prompt
@@ -140,3 +141,9 @@ def review_requests(
         )
         requests.append(ReviewRequest(f"{prompt}\n\n{note}", names))
     return requests
+
+
+def split_files(requests: list[ReviewRequest]) -> set[str]:
+    """The files reviewed in parts: those whose diff went out in more than one request."""
+    counts = Counter(name for request in requests for name in request.filenames)
+    return {name for name, count in counts.items() if count > 1}

@@ -9,7 +9,7 @@ from pr_analyzer.config import settings
 from pr_analyzer.diff import iter_new_lines
 from pr_analyzer.exceptions import LLMError
 from pr_analyzer.llm import engine as engine_module
-from pr_analyzer.llm.chunking import plan_chunks, review_requests, split_patch
+from pr_analyzer.llm.chunking import plan_chunks, review_requests, split_files, split_patch
 from pr_analyzer.llm.engine import LLMEngine
 from pr_analyzer.llm.prompts import build_prompt
 from pr_analyzer.models import FileChange, PRSummary, Suggestion
@@ -37,6 +37,15 @@ def reply(*suggestions):
          "title": f"Remark on {name}", "description": "d", "confidence": 0.9}
         for name, line in suggestions
     ]})
+
+
+def remark(filename, title, severity="MEDIUM", line=3, category="security"):
+    return {"filename": filename, "line": line, "severity": severity, "category": category,
+            "title": title, "description": "d", "confidence": 0.9}
+
+
+def answer(*remarks):
+    return json.dumps({"suggestions": list(remarks)})
 
 
 # a patch with context, removed and added lines, and two hunks
@@ -128,6 +137,11 @@ def test_part_of_a_split_file_says_so():
     assert all("(some of them only in part)" in r.prompt for r in requests)
     assert all(r.filenames == ["big.py"] for r in requests)
 
+def test_split_files_are_those_in_more_than_one_request():
+    pr = make_pr(added_file("a.py", 10), added_file("big.py", 60), added_file("c.py", 10))
+    assert split_files(review_requests(pr, [], 40)) == {"big.py"}
+    assert split_files(review_requests(make_pr(added_file("a.py", 30)), [], 40)) == set()
+
 # ── reviewing in several requests ─────────────────────────────────────────────
 @pytest.fixture
 def llm(monkeypatch):
@@ -218,6 +232,50 @@ def test_requests_can_run_side_by_side_and_stay_in_order(llm, monkeypatch):
     suggestions = LLMEngine().analyze(three_files(), [])
 
     assert [s.filename for s in suggestions] == ["a.py", "b.py", "c.py"]
+
+# ── repeats ───────────────────────────────────────────────────────────────────
+def answer_in_turn(monkeypatch, *answers):
+    # requests are sent one at a time, in order: each gets the next answer
+    queue = iter(answers)
+    monkeypatch.setattr(LLMEngine, "call_ollama", lambda self, prompt: next(queue))
+
+def test_distinct_remarks_on_one_line_are_all_kept(llm):
+    # auth.py went out whole, so its reply holds no repeats, however many requests the PR took
+    llm.replies = {"auth.py": answer(remark("auth.py", "MD5 used for checksums", "MEDIUM"),
+                                     remark("auth.py", "Hardcoded admin password", "CRITICAL"))}
+    pr = make_pr(added_file("auth.py"), added_file("vendor.py", 60))
+
+    suggestions = LLMEngine().analyze(pr, [])
+
+    assert len(llm.prompts) == 3
+    assert [(s.severity, s.title) for s in suggestions] == [
+        ("MEDIUM", "MD5 used for checksums"), ("CRITICAL", "Hardcoded admin password")]
+
+def test_a_repeated_remark_keeps_its_most_severe_copy(llm, monkeypatch):
+    answer_in_turn(monkeypatch,
+                   answer(remark("big.py", "Hardcoded password", "MEDIUM", line=None)),
+                   answer(remark("big.py", "hardcoded  password.", "CRITICAL", line=None)))
+
+    [kept] = LLMEngine().analyze(make_pr(added_file("big.py", 60)), [])
+
+    assert (kept.severity, kept.title) == ("CRITICAL", "hardcoded  password.")
+
+def test_different_remarks_from_the_parts_of_a_file_are_all_kept(llm, monkeypatch):
+    answer_in_turn(monkeypatch,
+                   answer(remark("big.py", "No tests for login()", line=None, category="testing")),
+                   answer(remark("big.py", "No tests for logout()", line=None, category="testing")))
+
+    suggestions = LLMEngine().analyze(make_pr(added_file("big.py", 60)), [])
+
+    assert [s.title for s in suggestions] == ["No tests for login()", "No tests for logout()"]
+
+def test_one_replys_own_suggestions_are_never_merged(llm, monkeypatch):
+    twice = remark("big.py", "Weak hash", line=None)
+    answer_in_turn(monkeypatch, answer(twice, twice), answer())
+
+    suggestions = LLMEngine().analyze(make_pr(added_file("big.py", 60)), [])
+
+    assert len(suggestions) == 2
 
 # ── cached replies ────────────────────────────────────────────────────────────
 def test_cached_reply_is_not_requested_again(llm, tmp_path):
