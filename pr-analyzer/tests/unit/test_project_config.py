@@ -144,6 +144,61 @@ def test_read_names_files_that_cannot_be_parsed(raw, problem):
     assert config == ProjectConfig()
     assert [p[:len(problem)] for p in problems] == [problem]
 
+# ── crafted files ─────────────────────────────────────────────────────────────
+# A PR's copy is read before any analysis, so an error from tomllib, or from printing a value in
+# a problem, used to stop the whole run with "Unexpected error" instead of becoming a finding
+TOO_BIG = "the file has an integer outside TOML's 64-bit range"
+TOO_DEEP = "the file nests tables or arrays more than 100 levels deep"
+DIGITS = "1" * 5000                 # more than the 4300 digits int() reads
+HEX = "0x" + "f" * 4000             # tomllib reads it, but it has too many digits to print
+DOTTED = ".".join(["a"] * 999)      # a key that nests 999 tables, without any recursion
+
+@pytest.mark.parametrize("toml", [
+    f"x = {DIGITS}",                                    # tomllib let int()'s ValueError through
+    f"[thresholds]\nmax_file_lines = {DIGITS}",
+    f"inline_min_severity = {HEX}",                     # its repr in the problem raised
+    f"[thresholds]\nmax_file_lines = [{HEX}]",          # so did json.dumps...
+    f"[thresholds]\ncomplexity_medium = {HEX}",         # ...and the comparison with complexity_high
+    f"[thresholds]\nmax_file_lines = {HEX}",            # accepted, though it couldn't be printed
+    "[thresholds]\nmax_file_lines = 9223372036854775808",   # 2**63, the first one out of range
+], ids=["digits", "digits-threshold", "hex-severity", "hex-in-array", "hex-complexity",
+        "hex-threshold", "2**63"])
+def test_integers_outside_tomls_range_are_a_problem(toml):
+    assert read_project_config(toml) == (ProjectConfig(), [TOO_BIG])
+
+def test_the_largest_toml_integer_is_accepted():
+    config = parse_project_config("[thresholds]\nmax_file_lines = 9223372036854775807")
+    assert config.thresholds.max_file_lines == 2**63 - 1
+
+@pytest.mark.parametrize("toml", [
+    "x = " + "[" * 1000 + "]" * 1000,                   # tomllib's RecursionError
+    "x = " + "{a = " * 1000 + "1" + "}" * 1000,
+    ".".join(["a"] * 1001) + " = 1",                    # more key parts than tomllib takes
+    # nested by dotted keys, which tomllib reads without recursion, but repr and json.dumps
+    # print with it
+    "inline_min_severity = " + f"{{{DOTTED} = " * 20 + "1" + "}" * 20,
+    "[thresholds]\nmax_file_lines = " + f"{{{DOTTED} = " * 20 + "1" + "}" * 20,
+    "x = " + "[" * 101 + "]" * 101,                     # one level past the limit
+], ids=["arrays", "inline-tables", "key-parts", "dotted-severity", "dotted-threshold", "101-levels"])
+def test_values_nested_too_deeply_are_a_problem(toml):
+    assert read_project_config(toml) == (ProjectConfig(), [TOO_DEEP])
+
+def test_nesting_up_to_the_limit_is_checked_as_usual():
+    _, problems = read_project_config("inline_min_severity = " + "[" * 100 + "]" * 100)
+    assert problems == [f"inline_min_severity: {'[' * 100}{']' * 100} is not a severity; use one "
+                        "of LOW, MEDIUM, HIGH, CRITICAL"]
+
+def test_crafted_pr_copy_is_a_finding():
+    [finding] = config_findings(f"x = {DIGITS}")
+    assert finding.title == f"Invalid config: {TOO_BIG}"
+    assert (finding.filename, finding.severity, finding.rule_id) == (".pr-analyzer.toml", "HIGH", "config")
+
+def test_crafted_local_file_is_an_error(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text("x = " + "[" * 1000 + "]" * 1000, encoding="utf-8")
+    with pytest.raises(ConfigError, match=f"settings.toml is invalid:\n  - {TOO_DEEP}"):
+        load_project_config(path)
+
 # ── a PR's own copy ───────────────────────────────────────────────────────────
 def test_pr_copy_problems_are_blocking_findings():
     # a typo used to merge unnoticed, then stop every later run

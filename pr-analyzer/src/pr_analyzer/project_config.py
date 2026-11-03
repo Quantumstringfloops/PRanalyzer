@@ -46,6 +46,15 @@ RULE_IDS = frozenset(ast_analyzer.RULE_IDS + scanner.RULE_IDS + (LLM_RULE, CONFI
 KEYS = ("disable", "ignore_paths", "block_on", "inline_min_severity", "thresholds")
 THRESHOLD_KEYS = tuple(f.name for f in dataclasses.fields(Thresholds))
 
+# Checked before anything else, since a problem that quoted such a value would fail to print it:
+# Python won't turn an integer of over 4300 digits into text (tomllib reads one written in hex,
+# octal or binary, and raises for a decimal one), nor print a value nested more deeply than the
+# recursion limit. TOML's own integers are 64-bit, and no setting nests deeper than [thresholds].
+_TOML_INTEGERS = range(-2**63, 2**63)
+_MAX_NESTING = 100
+_TOO_BIG = "the file has an integer outside TOML's 64-bit range"
+_TOO_DEEP = f"the file nests tables or arrays more than {_MAX_NESTING} levels deep"
+
 # The part of .gitignore's syntax that ignore_paths supports, matched as git matches it: `*` and
 # `?` stay within one path segment, and `**` as a whole segment crosses directories (`**/` any
 # number of them, a final `/**` everything inside); any other run of asterisks is a `*`, and
@@ -129,7 +138,9 @@ def parse_project_config(raw: bytes | str, source: str = CONFIG_FILE) -> Project
 
 def read_project_config(raw: bytes | str) -> tuple[ProjectConfig, list[str]]:
     """The settings in a file and every problem with it. With any problem the settings are the
-    defaults: the valid part of a broken file isn't what the project chose either."""
+    defaults: the valid part of a broken file isn't what the project chose either. A file that
+    can't be parsed, or holds an integer or nesting past the limits above, has only that problem:
+    its keys aren't checked."""
     try:
         text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
         data = tomllib.loads(text)
@@ -137,8 +148,17 @@ def read_project_config(raw: bytes | str) -> tuple[ProjectConfig, list[str]]:
         return ProjectConfig(), ["the file is not UTF-8 text"]
     except tomllib.TOMLDecodeError as e:
         return ProjectConfig(), [f"the file is not valid TOML: {e}"]
+    except ValueError:
+        # int() refuses a decimal integer of over 4300 digits, and tomllib lets that through
+        return ProjectConfig(), [_TOO_BIG]
+    except RecursionError:
+        # tomllib reads nested arrays and inline tables recursively, and recent versions refuse
+        # a key with more parts than the recursion limit
+        return ProjectConfig(), [_TOO_DEEP]
 
-    problems: list[str] = []
+    problems = _limit_problems(data)
+    if problems:
+        return ProjectConfig(), problems
     values = _validate(data, problems)
     return (ProjectConfig() if problems else ProjectConfig(**values)), problems
 
@@ -170,6 +190,24 @@ def config_findings(text: str) -> list[Suggestion]:
         )
         for problem in problems
     ]
+
+
+def _limit_problems(data: dict[str, Any]) -> list[str]:
+    """_TOO_BIG and _TOO_DEEP, if the file has such a value. Walked without recursion, since the
+    nesting isn't known yet; the file itself is level 0, and a table or array in it level 1."""
+    found: set[str] = set()
+    pending: list[tuple[Any, int]] = [(data, 0)]
+    while pending:
+        value, level = pending.pop()
+        if isinstance(value, dict):
+            value = list(value.values())
+        if isinstance(value, list) and level > _MAX_NESTING:
+            found.add(_TOO_DEEP)
+        elif isinstance(value, list):
+            pending += [(item, level + 1) for item in value]
+        elif isinstance(value, int) and value not in _TOML_INTEGERS:
+            found.add(_TOO_BIG)
+    return sorted(found)
 
 
 def _validate(data: dict[str, Any], problems: list[str]) -> dict[str, Any]:
