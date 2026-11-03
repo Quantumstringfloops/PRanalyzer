@@ -141,14 +141,14 @@ The LLM prompt treats the PR the same way: its title, file names and diff sit be
 
 ### What the line rules skip
 
-The pattern rules read one added line at a time and tell code, string literals and comments apart in Python, JavaScript and TypeScript (and `//`, `/* */` and `"..."` in C-family languages such as Java, Go or Rust):
+The pattern rules read one added line at a time and tell code, string literals and comments apart in Python, JavaScript and TypeScript, and in C-family languages such as Java, Go or Rust (`//`, `/* */` and `"..."`). In C, C++ and C# a line starting with `#` is a preprocessor directive (`#define`, `#pragma`, `#region`) and is read like a comment. PHP and other languages are matched as before, anywhere in the line, and a line starting with `#`, `//`, `/*` or `*` counts as a comment:
 
 - Rules about calls and settings (`eval(`, `pickle.load`, `yaml.load`, `subprocess … shell=True`, `debug=True`, `print(`, `console.log`) ignore text inside strings and comments. The code in an f-string's `{...}` or a template literal's `${...}` is checked like any other code, though a format spec such as `:>8` is text. The SQL-injection rule still sees a string being formatted into a query.
 - `todo-comment` counts `TODO` and `FIXME` only in comments.
 - The secret rules read the whole line, strings and comments included, since that is where secrets end up.
 - `magic-number` skips numbers that are already named or explain themselves: a keyword argument or default value (`timeout=30`), an assignment (`retries = 5`), a dict key or object property (`"port": 8080`, `{ port: 8080 }`), a constant definition (`MAX_SIZE = 10`), a slice or index (`line[:72]`), a line about a version (`sys.version_info >= (3, 11)`), and well-known values: 10, 100 and 1000; 24, 60, 3600 and 86400; powers of two from 16 to 65536, 255 and 65535; ports 80 and 443; and the standard HTTP status codes. Test files are skipped.
 
-Because each line is read on its own, the middle lines of a multi-line string (a docstring, a template literal) or of a `/* */` comment are read as code unless they start like a comment (`*`, `#`, `//`), and JavaScript regex literals aren't recognised. Other languages are matched as before, anywhere in the line.
+Because each line is read on its own, the middle lines of a multi-line string (a docstring, a template literal) or of a `/* */` comment are read as code unless they start like a comment (`*`, `#`, `//`), and JavaScript regex literals aren't recognised.
 
 ### Project configuration (`.pr-analyzer.toml`)
 

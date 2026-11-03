@@ -15,7 +15,11 @@ code, so they stay; only the text around them, and a format spec, is blanked
 (`f"id {run(x):>8}"` -> `f"   {run(x)    }"`, `` `a ${run(b)}` `` -> `` `  ${run(b)}` ``).
 
 Python, JavaScript/TypeScript and C-family files are lexed; for any other language both views are
-the whole line, which is how every rule matched before. Limits, since each line is read alone:
+the whole line, which is how every rule matched before. Some lines are comments as a whole: a line
+starting with `*` (the middle of a /* */ block, which started on an earlier line) and, in C, C++
+and C#, a line starting with `#` (a preprocessor directive such as `#define` or `#pragma`).
+
+Limits, since each line is read alone:
 
 - a line inside a multi-line string (a docstring's middle lines, a template literal spanning
   lines) or inside a /* */ block is read as code, unless it starts like a comment (`*`, `#`, `//`);
@@ -24,7 +28,7 @@ the whole line, which is how every rule matched before. Limits, since each line 
 """
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 COMMENT_PREFIXES = ("#", "//", "/*", "*")
 # replacement fields nested deeper than this (never seen in real code) end the lexing of a line,
@@ -47,6 +51,7 @@ class Syntax:
     """How a family of languages writes comments and strings."""
     tokens: re.Pattern[str]         # a comment, a string, or the start of an interpolated string
     field_tokens: re.Pattern[str]   # the same plus brackets, inside a replacement field
+    comment_lines: tuple[str, ...] = ("*",)     # a line starting with one of these is a comment
     # The text of an interpolated string up to a replacement field, by (quote, raw), and what
     # opens a field: Python's f-strings and t-strings and JavaScript's template literals have them.
     template_text: Mapping[tuple[str, bool], re.Pattern[str]] = field(default_factory=dict)
@@ -97,14 +102,14 @@ JAVASCRIPT = Syntax(
 # single quotes are char literals or (in Rust) lifetimes, so only "..." counts as a string
 _C_TOKENS = re.compile(rf"(?P<comment>//.*|{_BLOCK_COMMENT})|(?P<string>{_STRING})")
 C_FAMILY = Syntax(tokens=_C_TOKENS, field_tokens=_C_TOKENS)
+# a line starting with "#" is a preprocessor directive (#define, #pragma, #region), not code
+C_PREPROCESSED = replace(C_FAMILY, comment_lines=("*", "#"))
 
+# PHP isn't lexed: its '...' strings and # comments would need a lexer of their own.
 LEXERS = {".py": PYTHON}
 LEXERS.update(dict.fromkeys((".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"), JAVASCRIPT))
-LEXERS.update(dict.fromkeys(
-    (".java", ".go", ".cs", ".kt", ".swift", ".scala", ".rs", ".php",
-     ".c", ".h", ".cc", ".cpp", ".hpp"),
-    C_FAMILY,
-))
+LEXERS.update(dict.fromkeys((".java", ".go", ".kt", ".swift", ".scala", ".rs"), C_FAMILY))
+LEXERS.update(dict.fromkeys((".c", ".h", ".cc", ".cpp", ".hpp", ".cs"), C_PREPROCESSED))
 
 
 @dataclass(frozen=True)
@@ -119,12 +124,11 @@ def is_comment(text: str) -> bool:
 
 def split_line(text: str, extension: str) -> LineParts:
     syntax = LEXERS.get(extension)
-    # The middle lines of a /* */ block start with "*", which a lexer can't tell from one line.
-    # Without a lexer, any comment prefix marks a whole-line comment, as it always did.
-    if text.lstrip().startswith("*") or (syntax is None and is_comment(text)):
-        return LineParts(" " * len(text), text)
     if syntax is None:
-        return LineParts(text, text)
+        # Without a lexer, any comment prefix marks a whole-line comment, as it always did.
+        return LineParts(" " * len(text), text) if is_comment(text) else LineParts(text, text)
+    if text.lstrip().startswith(syntax.comment_lines):
+        return LineParts(" " * len(text), text)
     return _Lexer(text, syntax).split()
 
 

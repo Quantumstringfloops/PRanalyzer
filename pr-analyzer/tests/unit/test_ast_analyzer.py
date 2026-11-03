@@ -233,6 +233,18 @@ def test_explained_numbers_are_not_magic(line, filename):
 def test_unexplained_numbers_are_still_flagged(line):
     assert "magic-number" in rules_for(line)
 
+# ── C-family and PHP ──────────────────────────────────────────────────────────
+@pytest.mark.parametrize("line, filename", [
+    ("#define CACHE_TTL_SECONDS 90", "cache.h"),   # the named constant the rule asks for
+    ("#if defined(_MSC_VER) && _MSC_VER >= 1900", "compat.h"),
+    ("#pragma warning disable 1591", "Api.cs"),
+])
+def test_preprocessor_lines_are_not_magic_numbers(line, filename):
+    assert "magic-number" not in rules_for(line, filename)
+
+def test_php_hash_comment_is_a_comment():
+    assert rules_for("# TODO: remove this hack", "index.php") == ["todo-comment"]
+
 # ── rule ids ──────────────────────────────────────────────────────────────────
 def test_rule_ids_are_unique_and_kebab_case():
     # they are what .pr-analyzer.toml's `disable` list names, so they must stay stable

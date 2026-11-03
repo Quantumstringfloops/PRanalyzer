@@ -1,6 +1,6 @@
 import pytest
 
-from pr_analyzer.analyzer.line_lexer import blank_string, split_line
+from pr_analyzer.analyzer.line_lexer import LineParts, blank_string, split_line
 
 def blanks(n: int) -> str:
     return " " * n
@@ -93,6 +93,25 @@ def test_c_family_strings_and_comments():
 
 def test_rust_lifetimes_are_not_strings():
     assert split_line("fn f<'a>(x: &'a str) {}", ".rs").code == "fn f<'a>(x: &'a str) {}"
+
+@pytest.mark.parametrize("line, extension", [
+    ("#define CACHE_TTL_SECONDS 90", ".h"),
+    ("  #pragma warning disable 1591", ".cs"),
+    ("#if defined(_MSC_VER) && _MSC_VER >= 1900", ".cpp"),
+])
+def test_c_preprocessor_directives_are_comments(line, extension):
+    # they were read as code, so every numeric #define counted as a magic number
+    parts = split_line(line, extension)
+    assert parts.code.strip() == "" and parts.comments == line
+
+def test_rust_attributes_are_code():
+    assert split_line("#[repr(align(64))]", ".rs").code == "#[repr(align(64))]"
+
+def test_php_is_matched_as_before():
+    # read as C, the // in a '...' string started a comment and a # comment was code
+    url = "$x = file_get_contents('http://a'); eval($x);"   # pr-analyzer: ignore
+    assert split_line(url, ".php") == LineParts(url, url)
+    assert split_line("# never eval($input)", ".php").code.strip() == ""   # pr-analyzer: ignore
 
 def test_unlexed_languages_match_as_before():
     parts = split_line('echo "eval(x)"', ".sh")   # pr-analyzer: ignore

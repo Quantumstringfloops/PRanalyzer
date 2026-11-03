@@ -198,6 +198,16 @@ def test_sql_string_with_inner_quotes_is_still_flagged():
     code = "cur.execute(\"SELECT * FROM t WHERE name = '%s'\" % name)"  # pr-analyzer: ignore
     assert "Possible SQL injection" in titles(make_file(added(code)))
 
+def test_php_hash_comment_is_not_a_call():
+    # a # comment used to be read as code in PHP, so this blocked the run with a HIGH finding
+    file = make_file(added("# never eval($input) here"), filename="index.php")  # pr-analyzer: ignore
+    assert scanner.scan([file]) == []
+
+def test_php_url_in_single_quotes_does_not_hide_a_call():
+    # the // in the URL used to start a comment that hid the rest of the line
+    code = "$x = file_get_contents('http://a'); eval($x);"  # pr-analyzer: ignore
+    assert titles(make_file(added(code), filename="index.php")) == ["eval() usage detected"]
+
 def test_dangerous_patterns_only_in_source_files():
     docs = make_file(added("Never call eval(input) on user data."), filename="README.md")  # pr-analyzer: ignore
     assert scanner.scan([docs]) == []
