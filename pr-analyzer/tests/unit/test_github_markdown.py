@@ -53,6 +53,7 @@ def test_text_still_reads_the_same():
 @pytest.mark.parametrize("text", [
     "@a <b> [c](d) e://f www.g #1 GH-2 &#64;h `@i`\n```\n@j\n```\nk@l",
     "`]:` $`@m`$\n~~~math\n@n\n~~~\nx ~~~ GH-1\n<`@o>",
+    "> ```gh-1\n\n`@a`",   # once gh-1 is broken, it must still read as a language name
 ])
 def test_neutralising_twice_changes_nothing_more(text):
     # the review's "already posted" check compares comment bodies byte for byte
@@ -99,9 +100,23 @@ def test_fenced_code_is_left_as_it_is():
     "~~~\n<div>@{user}</div>\n~~~",       # tildes
     "````\n```\n@still.code\n````",       # a shorter fence doesn't close a longer one
     "```\r\n@x\r\n```",                   # Windows line endings
+    "```\r@x\r```",                       # and a lone \r, which ends a line too
     "```js\nconst first = rows[0]",       # an unclosed block runs to the end
+    "    ```\n```\n@a\n```",              # four spaces make indented code, not a fence
 ])
 def test_other_fenced_code_is_left_as_it_is(text):
+    assert neutralise(text) == text
+
+@pytest.mark.parametrize("language", ["c++", "c#", "objective-c", "vb.net"])
+def test_code_in_a_language_named_with_punctuation_is_left_as_it_is(language):
+    text = f"```{language}\nx = y[0]  // @todo\n```"
+    assert neutralise(text) == text
+
+@pytest.mark.parametrize("blank", ["", "  ", "\t"])
+def test_code_after_a_blank_line_is_left_as_it_is(blank):
+    # a blank line, of nothing but spaces and tabs, ends the paragraph: a backtick left open
+    # before it can't pair with the code after it
+    text = f"`a\n{blank}\n`@b`"
     assert neutralise(text) == text
 
 def test_text_around_fenced_code_is_still_neutralised():
@@ -116,7 +131,8 @@ def test_text_around_fenced_code_is_still_neutralised():
     ("Ask @alice about ``a`b@c``", f"Ask @{ZW}alice about ``a`b@c``"),   # a longer fence
     ("see `GH-1` and `&#x40;`", "see `GH-1` and `&#x40;`"),
     ("`@a\\` @b", f"`@a\\` @{ZW}b"),          # in a code span a backslash escapes nothing
-    ("run `echo $HOME`", "run `echo $HOME`"),   # a "$" in the code itself starts no maths
+    ("run `ssh $USER@host`", "run `ssh $USER@host`"),   # a "$" in the code itself starts no maths
+    ("| a | `@b` |", "| a | `@b` |"),           # a table cell can hold code, if it holds no "|"
 ])
 def test_inline_code_is_left_as_it_is(text, expected):
     assert neutralise(text) == expected
@@ -134,13 +150,26 @@ def test_inline_code_cannot_hide_a_link_definition():
     ("\\`@a`", f"\\`@{ZW}a`"),                      # an escaped backtick opens nothing
     ("`` @a `", f"`` @{ZW}a `"),                     # runs of different lengths don't pair
     ("`a\n\n@b`", f"`a\n\n@{ZW}b`"),                 # a code span can't cross a blank line
+    ("`a\r\r@b`", f"`a\r\r@{ZW}b`"),                 # a lone \r ends a line as well
+    ("`a\n\u00a0\n`@b`", f"`a\n\u00a0\n`@{ZW}b`"),   # a line of non-breaking spaces isn't blank
     ("x ` y\n`@a`", f"x ` y\n`@{ZW}a`"),             # the backtick on the first line pairs first
     ("| `a | @b` |\n| --- |", f"| `a | @{ZW}b` |\n| --- |"),   # a table splits cells at "|"
-    ("`" * 1001 + "@a" + "`" * 1001, "`" * 1001 + f"@{ZW}a" + "`" * 1001),   # too long for GitHub
     ("<1`x@a> `", f"<1`x@{ZW}a> `"),                # an e-mail autolink comes before code
 ])
 def test_look_alike_inline_code_is_neutralised(text, expected):
     assert neutralise(text) == expected
+
+# cmark-gfm, which renders GitHub's comments, opens no code span with a run of more than 1000
+# backticks. The "a" after the run reads as a language name, so the line can't pass for a drawn
+# block, which would be neutralised whatever the limit.
+@pytest.mark.parametrize("ticks, inside", [
+    (1000, "a @b "),          # a code span: left as it is
+    (1001, f"a @{ZW}b "),     # one more backtick, and it's text
+])
+def test_runs_of_over_1000_backticks_open_no_code_span(ticks, inside):
+    run = "`" * ticks
+    assert neutralise(f"{run}a @b {run}") == f"{run}{inside}{run}"
+    assert neutralise_line(f"{run}a @b {run}") == f"{run}{inside}{run}"
 
 # ── maths and diagrams ────────────────────────────────────────────────────────
 # GitHub draws these instead of showing them as code, and a drawing could hold a link
@@ -149,10 +178,15 @@ def test_look_alike_inline_code_is_neutralised(text, expected):
     ("~~~ Mermaid\nA[`@b`]\n~~~", f"~~~ Mermaid\nA[`@{ZW}b`]\n~~~"),
     ("```m&#97;th\n`@b`\n```", f"```m&{ZW}#{ZW}97;th\n`@{ZW}b`\n```"),   # GitHub decodes it
     ("- ~~~math\n  `@b`", f"- ~~~math\n  `@{ZW}b`"),         # where the block ends is unclear
+    ("- ```math\n\n  `@b`", f"- ```math\n\n  `@{ZW}b`"),     # with backticks, past a blank line
     ("```math\n@b\n```\n`@c`", f"```math\n@{ZW}b\n```\n`@c`"),   # code after the block is code
 ])
 def test_drawn_blocks_are_neutralised(text, expected):
     assert neutralise(text) == expected
+
+@pytest.mark.parametrize("language", ["math", "mermaid", "geojson", "topojson", "stl"])
+def test_every_kind_of_drawn_block_is_neutralised(language):
+    assert neutralise(f"```{language}\n`@b`\n```") == f"```{language}\n`@{ZW}b`\n```"
 
 @pytest.mark.parametrize("text, expected", [
     ("$`\\href{https://evil.example}{x}`$", f"$`\\href{{https:{ZW}//evil.example}}{{x}}`$"),
@@ -167,10 +201,16 @@ def test_code_after_a_dollar_sign_is_neutralised(text, expected):
 @pytest.mark.parametrize("text, expected", [
     ("```js `x`\n@a\n```", f"```js `x`\n@{ZW}a\n```"),         # a backtick in the info string
     ("```\n@a\n````\n@b", f"```\n@a\n````\n@{ZW}b"),             # a longer fence closes too
+    ("```\nx\n   ```\n@a", f"```\nx\n   ```\n@{ZW}a"),            # so does one indented 3 spaces
+    ("```\nx\n```\t\n@a", f"```\nx\n```\t\n@{ZW}a"),              # or followed by a tab
+    ("```\nx\n    ```\n```\n@a", f"```\nx\n    ```\n```\n@{ZW}a"),   # but not one indented 4
     ("\t```\n@a", f"\t```\n@{ZW}a"),                              # a tab indents it too far
     ("> ```\n> @a\n@b", f"> ```\n> @{ZW}a\n@{ZW}b"),              # a quote's block ends with it
     ("- item\n  ```\n@a\n```", f"- item\n  ```\n@{ZW}a\n```"),     # so does a list item's
     ("  ```\n```\n@a\n```", f"  ```\n```\n@{ZW}a\n```"),          # top level or list item?
+    ("   ```\nx\n```\n@a\n```", f"   ```\nx\n```\n@{ZW}a\n```"),   # 3 spaces leave the same doubt
+    ("   ~~~\nx\n~~~\n@a\n~~~", f"   ~~~\nx\n~~~\n@{ZW}a\n~~~"),   # with tildes
+    ("  ```js\nx\n```\n@a\n```", f"  ```js\nx\n```\n@{ZW}a\n```"),   # and with a language
 ])
 def test_look_alike_fenced_code_is_neutralised(text, expected):
     assert neutralise(text) == expected
@@ -186,8 +226,9 @@ def test_one_line_text_has_no_code_block():
 # drops code spans that CommonMark (and cmark-gfm) keep.
 PIECES = [
     "`", "``", "```", "~~~", "\\", "\\`", "@a", "#1", "<a", "<!--", "](", "://", "www.", "&#x40;",
-    "&commat;", "&#35;", "GH-1", "gh\\-2", "a", " ", "   ", "\t", "\n", "\n\n", "\r\n", "- ", "> ",
-    "1. ", "|", "| --- |", "\n```\n", "\n  ```\n", "\n~~~math\n", "$", "$`", "`$", "<1", "<`", "@a>",
+    "&commat;", "&#35;", "GH-1", "gh\\-2", "a", " ", "   ", "\t", "\n", "\n\n", "\r\n", "\r", "- ",
+    "> ", "1. ", "|", "| --- |", "\n```\n", "\n  ```\n", "\n   ```\n", "\n~~~math\n", "$", "$`",
+    "`$", "<1", "<`", "@a>",
 ]
 LIVE_TEXT = re.compile(r"@[a-z0-9]|#\d|gh-\d|://|www\.", re.IGNORECASE)
 LIVE_TOKENS = {"link_open", "image", "html_inline", "html_block"}
