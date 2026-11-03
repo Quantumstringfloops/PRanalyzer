@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     semgrep_timeout_seconds: int = Field(default=300, gt=0)
     pip_audit_timeout_seconds: int = Field(default=300, gt=0)
 
+    # on-disk cache of file contents and LLM replies; empty dir = $XDG_CACHE_HOME/pr-analyzer
+    # or ~/.cache/pr-analyzer
+    cache_enabled: bool = True
+    cache_dir: str = ""
+    cache_max_size_mb: int = Field(default=500, gt=0)
+    cache_max_age_days: int = Field(default=30, gt=0)
+
     log_level: str = "WARNING"
 
 
