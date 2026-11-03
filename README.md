@@ -135,7 +135,7 @@ Every finding on that line is dropped and doesn't count towards the score, which
 
 ### Text the bot posts
 
-Finding titles and descriptions can come from the LLM, which reads the PR, from Semgrep messages that quote the PR's code, and from file names the PR chose. Before posting a review the bot neutralises that text with an invisible zero-width space, so it reads the same but can't @mention anyone, add HTML (such as an `<!-- -->` comment that hides the rest of the review or fakes the bot's hidden tag), show links or images, or cross-reference issues; file names are shown as code.
+Finding titles and descriptions can come from the LLM, which reads the PR, from Semgrep messages that quote the PR's code, and from file names the PR chose. Before posting a review the bot neutralises that text with an invisible zero-width space, so it reads the same but can't @mention anyone, add HTML (such as an `<!-- -->` comment that hides the rest of the review or fakes the bot's hidden tag), show links or images, or cross-reference issues (`#123`, `GH-123`), not even through character references such as `&#x40;` or `&commat;`, which are shown as written. In the list of findings, file names are shown as code; in the notes they are neutralised like the rest.
 
 The LLM prompt treats the PR the same way: its title, file names and diff sit between `<untrusted_pr_content>` tags that the model is told hold code to review and never instructions, any copy of the tags inside the PR is escaped, and the scanner findings the model must not repeat sit in a block of their own. Prompt injection can't be ruled out entirely, so the LLM's reply is still checked strictly: only JSON suggestions about files in the PR, with known severities and categories, are kept.
 

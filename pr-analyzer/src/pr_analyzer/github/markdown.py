@@ -6,22 +6,34 @@ could ping people, hide the rest of the review inside an HTML comment, fake the 
 review tag, or show a convincing link. A zero-width space after the character that starts each
 of these keeps the text looking the same while GitHub no longer recognises it:
 
-    @          mentions (@user, @org/team) and e-mail autolinks
-    <          raw HTML, including <!-- comments --> and <https://...> autolinks
-    ]          links and images, [text](url) and ![alt](src), and reference definitions [x]: url
-    :// www.   bare-URL autolinks
-    # + digit  issue and PR references, which would add a cross-link to the referenced issue
+    @                   mentions (@user, @org/team) and e-mail autolinks
+    <                   raw HTML, including <!-- comments --> and <https://...> autolinks
+    ]                   links and images, [text](url) and ![alt](src), and reference
+                        definitions [x]: url
+    :// www.            bare-URL autolinks
+    # or GH- + digit    issue and PR references (#12, GH-12), which would add a cross-link to
+                        the referenced issue
+    & + # or name;      character references such as &#x40; and &commat;, which GitHub would
+                        decode into the characters above
 
 Single-line contexts (list items, table cells) also lose their newlines, so the text can't add
 headings or rows of its own.
 """
 import re
 
-ZERO_WIDTH_SPACE = "​"
+ZERO_WIDTH_SPACE = "\u200b"
 
-# where a zero-width space goes, unless one is already there
+# where a zero-width space goes, unless one is already there. GitHub decodes backslash escapes
+# too, so GH\-12, http:\/\/ and www\. count as well.
 _BREAK = re.compile(
-    r"(?:(?<=[@<\]])|(?<=:)(?=//)|(?<=www)(?=\.)|(?<=#)(?=\d))(?!​)", re.IGNORECASE
+    r"(?:(?<=[@<\]])"
+    r"|(?<=:)(?=\\?/\\?/)"
+    r"|(?<=www)(?=\\?\.)"
+    r"|(?<=#)(?=\d)"
+    r"|(?:(?<=gh-)|(?<=gh\\-))(?=\d)"
+    r"|(?<=&)(?=#|[a-z][a-z0-9]*;)"
+    r")(?!\u200b)",
+    re.IGNORECASE,
 )
 
 
