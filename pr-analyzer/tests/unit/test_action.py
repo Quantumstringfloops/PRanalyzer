@@ -24,6 +24,22 @@ for arg in "$@"; do last="$arg"; done
 case " $* " in *" -m venv "*) mkdir -p "$last/bin" && cp "$0" "$last/bin/python" ;; esac
 """
 
+# A json.py that a checked-out PR could hold: any Python process that imports it notes where it
+# ran, and stops
+PLANTED = """import os, sys
+with open(os.environ["MARKERS"], "a", encoding="utf-8") as handle:
+    handle.write(f"{__name__}.py ran in {sys.argv}\\n")
+raise SystemExit(99)
+"""
+
+# Stands in for a Python process started without -I, as pip's install of build dependencies and
+# the pr-analyzer command are: it notes the names of the PYTHON* variables it got, then imports json
+PROBE = """import os
+with open(os.environ["SEEN"], "a", encoding="utf-8") as handle:
+    handle.write(" ".join(sorted(name for name in os.environ if name.startswith("PYTHON"))) + "\\n")
+import json
+"""
+
 def run_scripts() -> dict[str, str]:
     """The run: script of each step, by step id, unindented as the runner hands it to bash."""
     scripts = {}
@@ -53,6 +69,18 @@ def run_step(step_id: str, workspace: Path, env: dict[str, str]) -> subprocess.C
         cwd=workspace, env={"PATH": os.environ.get("PATH", os.defpath), **env},
         capture_output=True, text=True, timeout=60,
     )
+
+def probe_command(tmp_path: Path) -> str:
+    """A shell command that runs PROBE with this Python, without -I, and fails if it fails."""
+    probe = tmp_path / "probe.py"
+    probe.write_text(PROBE, encoding="utf-8")
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(probe))} || exit"
+
+def job_python_variables(workspace: Path) -> dict[str, str]:
+    """PYTHON* variables a job could set, among them a PYTHONPATH that points at the workspace,
+    where the PR is checked out."""
+    return {"PYTHONPATH": str(workspace), "PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring", "PYTHON": "/usr/bin/python3"}
 
 # ── reading action.yml ────────────────────────────────────────────────────────
 def test_scripts_are_read_as_a_yaml_parser_reads_them():
@@ -112,4 +140,55 @@ def test_analyze_step_never_imports_modules_from_its_directory(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "a planted module ran" not in result.stderr
+    assert outputs.read_text() == "score=100\ngrade=A+\npassed=true\n"
+
+# ── the job's PYTHON* variables reach no Python process ───────────────────────
+@needs_bash
+def test_processes_pip_starts_get_none_of_the_jobs_python_variables(tmp_path):
+    # pip runs with -I, but the Python it starts to install build dependencies doesn't, so a
+    # PYTHONPATH the job pointed at the PR used to run the PR's json.py there, able to write to
+    # the venv that the next step runs with the token
+    workspace, runner_temp = tmp_path / "workspace", tmp_path / "runner-temp"
+    workspace.mkdir()
+    runner_temp.mkdir()
+    (workspace / "json.py").write_text(PLANTED, encoding="utf-8")
+    fake_python = FAKE_PYTHON + f'case " $* " in *" -m pip "*) {probe_command(tmp_path)} ;; esac\n'
+    markers, seen = tmp_path / "markers", tmp_path / "seen"
+    result = run_step("install", workspace, {
+        **job_python_variables(workspace),
+        "PYTHON": str(write_executable(tmp_path / "python", fake_python)),
+        "SOURCE": "/action/pr-analyzer", "EXTRAS": "security", "CALLS": str(tmp_path / "calls"),
+        "RUNNER_TEMP": str(runner_temp), "GITHUB_OUTPUT": str(tmp_path / "outputs"),
+        "MARKERS": str(markers), "SEEN": str(seen),
+    })
+
+    assert not markers.exists(), markers.read_text()
+    assert result.returncode == 0, result.stderr
+    assert seen.read_text() == "PYTHON\n"   # the step's own, which names the Python to install with
+
+@needs_bash
+def test_pr_analyzer_gets_none_of_the_jobs_python_variables(tmp_path):
+    # pr-analyzer runs without -I, from its console script, and hands its environment, less its
+    # secrets, to Semgrep and pip-audit, so a PYTHONPATH the job pointed at the PR used to run the
+    # PR's json.py in all three, and in pr-analyzer with the token in its environment
+    workspace, runner_temp = tmp_path / "workspace", tmp_path / "runner-temp"
+    bin_dir = tmp_path / "bin"
+    for folder in (workspace, runner_temp, bin_dir):
+        folder.mkdir()
+    (workspace / "json.py").write_text(PLANTED, encoding="utf-8")
+    write_executable(bin_dir / "python", f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    write_executable(bin_dir / "pr-analyzer", f"#!/bin/sh\n{probe_command(tmp_path)}\n"
+                                              f"echo {shlex.quote(json.dumps(REPORT))}\n")
+    markers, seen, outputs = tmp_path / "markers", tmp_path / "seen", tmp_path / "outputs"
+    result = run_step("analyze", workspace, {
+        **job_python_variables(workspace),
+        "PR_ANALYZER_BIN": str(bin_dir), "PR_URL": "https://github.com/o/r/pull/1",
+        "POST_REVIEW": "false", "FAIL_ON_BLOCK": "true", "LLM_PROVIDER": "", "CONFIG": "",
+        "RUNNER_TEMP": str(runner_temp), "GITHUB_WORKSPACE": str(workspace),
+        "GITHUB_OUTPUT": str(outputs), "MARKERS": str(markers), "SEEN": str(seen),
+    })
+
+    assert not markers.exists(), markers.read_text()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert seen.read_text() == "\n"   # not even PYTHON, which this step doesn't set
     assert outputs.read_text() == "score=100\ngrade=A+\npassed=true\n"

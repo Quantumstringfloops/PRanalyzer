@@ -212,6 +212,48 @@ def test_todo_in_docstrings_and_comment_bodies(line, filename):
     # only # and // comments used to count, so these notes went unreported
     assert rules_for(line, filename) == ["todo-comment"]
 
+@pytest.mark.parametrize("line, filename", [
+    ('    TODO = "todo"', "status.py"),                     # an enum member
+    ("if task.status == Status.TODO:", "board.py"),         # a member
+    ("case Status.TODO: return 1;", "board.ts"),
+    ("let next = Status::FIXME;", "board.rs"),
+    ("const x = { TODO: 1 };", "board.js"),                 # a key
+    ('  TODO: "todo",', "status.js"),                       # a key on a line of its own
+    ("enum Status { TODO, DOING, DONE }", "Status.java"),   # an item
+    ("    TODO,", "Status.java"),
+    ("open = [t for t in tasks if t.status == TODO]", "board.py"),   # a value
+    ("case TODO:", "Board.java"),                           # a case label
+    ("setStatus(TODO);", "board.js"),                       # an argument
+    ("count = counts[FIXME]", "board.py"),                  # an index
+    ('label = f"{TODO}"', "board.py"),                      # in an f-string's field
+])
+def test_todo_used_as_a_name_is_not_flagged(line, filename):
+    # a task tracker's statuses each got a finding and an inline comment
+    assert "todo-comment" not in rules_for(line, filename)
+
+@pytest.mark.parametrize("line, filename", [
+    ("    TODO(neil): handle v2.", "parse.py"),             # a note naming its owner
+    ("fun load(): Int = TODO()", "Loader.kt"),              # Kotlin's call for unfinished code
+    ("    Reads the header (TODO).", "parse.py"),
+    ("    3. [FIXME] read the diff", "parse.py"),
+    ("    trace_config: TODO", "parse.py"),
+    ("x = Status.TODO  # FIXME: rename", "board.py"),       # in a comment every marker counts
+])
+def test_todo_notes_next_to_code_punctuation_are_still_flagged(line, filename):
+    assert rules_for(line, filename) == ["todo-comment"]
+
+def test_a_call_in_a_string_continued_on_the_next_line_is_not_flagged():
+    # a string ending in a backslash used to go unrecognised, so the call in it was read as code
+    assert rules_for('hint = "call print(x) to debug \\') == []
+
+@pytest.mark.parametrize("line, filename, rule", [
+    ('f"{' * 21 + "x" + '}"' * 21 + ";print(y)", "calc.py", "print-call"),
+    ("`${" * 21 + "x" + "}`" * 21 + ";console.log(y)", "view.js", "console-log"),
+])
+def test_a_call_after_fields_nested_too_deep_is_still_flagged(line, filename, rule):
+    # past 20 nested fields the rest of the line used to be blanked, hiding the call
+    assert rule in rules_for(line, filename)
+
 # ── magic numbers ─────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("line, filename", [
     ("requests.get(url, timeout=25)", "app.py"),         # a keyword argument names it
@@ -267,6 +309,16 @@ def test_a_long_generated_line_is_checked_quickly():
     rules = rules_for(line, "table.js")
     assert time.perf_counter() - start < 1
     assert rules == ["long-line"]
+
+def test_a_long_subscript_is_checked_quickly():
+    # the "[" that explains a number, and a "]" closing it, were looked for in all the text before
+    # the number: a subscript of 64,000 numbers took seconds. Past the 120 characters searched, a
+    # number isn't explained by the "[".
+    line = "x = table[" + ", ".join(str(37 + i % 50) for i in range(64000)) + "]"
+    start = time.perf_counter()
+    rules = rules_for(line)
+    assert time.perf_counter() - start < 1
+    assert rules == ["magic-number", "long-line"]
 
 def test_a_number_thousands_of_digits_long_does_not_crash():
     # int() refuses more than 4,300 digits: the ValueError stopped the whole analysis

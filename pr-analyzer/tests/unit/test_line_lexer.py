@@ -43,6 +43,17 @@ def test_unclosed_string_runs_to_the_end_of_the_line():
     # the first line of a multi-line string: the rest of the line is text
     assert split_line('q = """SELECT eval(x)', ".py").code == f'q = """{blanks(14)}'   # pr-analyzer: ignore
 
+@pytest.mark.parametrize("line, extension, code", [
+    ('s = "a\\', ".py", 's = "  '),
+    ("s = 'a\\", ".py", "s = '  "),
+    ('const s = "a\\', ".js", 'const s = "  '),
+    ("const s = 'a\\", ".ts", "const s = '  "),
+])
+def test_a_string_ending_in_a_backslash_runs_to_the_end_of_the_line(line, extension, code):
+    # the backslash continues the string on the next line; such a string used to go unrecognised,
+    # so what it held was read as code
+    assert split_line(line, extension).code == code
+
 @pytest.mark.parametrize("line, extension", [
     ('a = "b"  # c', ".py"), ('f"{a:{b}} {c!r}"  # d', ".py"), ("`a ${b}` // c", ".js"),
 ])
@@ -84,6 +95,14 @@ def test_a_comment_inside_a_field_is_a_comment():
 @pytest.mark.parametrize("line, extension", [('f"{' * 1000 + "x", ".py"), ("`${" * 1000, ".js")])
 def test_deeply_nested_fields_do_not_exhaust_the_stack(line, extension):
     assert len(split_line(line, extension).code) == len(line)
+
+@pytest.mark.parametrize("line, extension", [
+    ('f"{' * 21 + "x" + '}"' * 21 + ";eval(y)", ".py"),   # pr-analyzer: ignore
+    ("`${" * 21 + "x" + "}`" * 21 + ";eval(y)", ".js"),   # pr-analyzer: ignore
+])
+def test_past_the_nesting_limit_the_rest_of_the_line_is_code(line, extension):
+    # the rest of the line used to be blanked, so the eval after the string went unreported
+    assert split_line(line, extension) == LineParts(line, blanks(len(line)))
 
 # ── JavaScript / TypeScript ───────────────────────────────────────────────────
 @pytest.mark.parametrize("line, code, comments", [

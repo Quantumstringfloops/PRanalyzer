@@ -54,11 +54,11 @@ def response(status, headers=None, body=None, compressed=False):
 
 
 class FakeEvent:
-    """threading.Event, except that wait() records its timeout and returns at once: no test
-    sleeps."""
+    """threading.Event, except that wait() returns at once, as if its timeout had run out: the
+    timeout is recorded and the fake monotonic clock moves on by that much. No test sleeps."""
 
-    def __init__(self, waits):
-        self.waits = waits
+    def __init__(self, clock):
+        self.clock = clock
         self.flag = False
 
     def set(self):
@@ -68,16 +68,18 @@ class FakeEvent:
         return self.flag
 
     def wait(self, timeout=None):
-        self.waits.append(timeout)
+        with self.clock.lock:   # the workers of a parallel fetch wait at the same time
+            self.clock.waits.append(timeout)
+            self.clock.mono += timeout
         return self.flag
 
 
 class BlockingEvent(FakeEvent):
-    """An event whose wait() records its timeout and then lasts until set(), however long the
-    timeout: a rate-limit wait that only cancel() ends."""
+    """An event whose wait() lasts until set(), however long its timeout: a rate-limit wait
+    that only cancel() ends."""
 
-    def __init__(self, waits):
-        super().__init__(waits)
+    def __init__(self, clock):
+        super().__init__(clock)
         self.released = threading.Event()
         self.waiting = threading.Semaphore(0)   # released as each wait() begins
 
@@ -86,10 +88,10 @@ class BlockingEvent(FakeEvent):
         self.released.set()
 
     def wait(self, timeout=None):
-        self.waits.append(timeout)
         self.waiting.release()
-        self.released.wait(TIMEOUT)
-        return self.flag
+        if not self.released.wait(TIMEOUT):
+            self.released.set()   # a test gone wrong: from here on the waits run their course
+        return super().wait(timeout)
 
 
 class Clock:
@@ -98,18 +100,24 @@ class Clock:
     def __init__(self, event=FakeEvent):
         self.now = NOW       # the wall clock, which GitHub's reset times are read against
         self.mono = 500.0    # the monotonic clock, which the waits are measured on
-        self.waits = []      # the timeout of every wait, in order
+        self.waits = []      # the timeout of every Event.wait, in order
         self.events = []
         self.event_class = event
+        self.lock = threading.Lock()
 
     def event(self):
-        event = self.event_class(self.waits)
+        event = self.event_class(self)
         self.events.append(event)
         return event
 
     def pause(self):
         return RateLimitPause(clock=lambda: self.now, monotonic=lambda: self.mono,
                               new_event=self.event)
+
+    @property
+    def waited(self):
+        """The seconds spent waiting, in all."""
+        return sum(self.waits)
 
 
 def join_threads(prefix):
@@ -167,18 +175,18 @@ def test_primary_limit_waits_until_the_reset(retry, clock):
     again = retry.increment("GET", "/repos/o/r", response=response(403, headers, PRIMARY))
     again.sleep()
 
-    assert clock.waits == [21]
+    assert clock.waited == 21
 
 def test_secondary_limit_named_only_in_the_message_waits_a_minute(retry, clock):
     again = retry.increment("GET", "/repos/o/r", response=response(403, body=SECONDARY, compressed=True))
     again.sleep()
-    assert clock.waits == [60]
+    assert clock.waited == 60
 
 def test_429_honours_retry_after(retry, clock):
     again = retry.increment("POST", "/repos/o/r/pulls/1/reviews",
                             response=response(429, {"Retry-After": "7"}))
     again.sleep()
-    assert clock.waits == [7]
+    assert clock.waited == 7
 
 def test_refusal_is_not_retried_and_keeps_its_message(retry, clock):
     with pytest.raises(GithubException) as excinfo:
@@ -213,7 +221,7 @@ def test_gives_up_after_three_retries(retry, clock):
         retry.sleep()
     with pytest.raises(RateLimitExceededException) as excinfo:
         retry.increment("GET", "/repos/o/r", response=response(429, {"Retry-After": "1"}))
-    assert clock.waits == [1, 1, 1]
+    assert clock.waited == 1 + 1 + 1
     assert excinfo.value.retry_at == NOW + 1
 
 def test_server_errors_back_off_without_the_rate_limit_pause(retry, clock):
@@ -224,23 +232,24 @@ def test_server_errors_back_off_without_the_rate_limit_pause(retry, clock):
 def test_other_threads_hold_back_while_one_waits(clock):
     pause = clock.pause()
 
-    pause.wait(30)
-    clock.mono += 10
-    pause.wait_if_paused()                 # another worker, ten seconds later
-    clock.mono += 25
+    pause.wait(30)                         # one worker waits out a limit, until 530
+    clock.mono = 510
+    pause.wait_if_paused()                 # another worker, ten seconds into that wait
+    assert clock.mono == 530
+    clock.mono += 5
     pause.wait_if_paused()                 # the limit has reset
 
-    assert clock.waits == [30, 20]
+    assert clock.waited == 30 + 20
 
 def test_setting_the_system_clock_back_does_not_stretch_a_wait(clock):
     pause = clock.pause()
 
-    pause.wait(30)
+    pause.wait(30)                         # until 530
     clock.now -= 3600                      # an hour back, ten seconds into the wait
-    clock.mono += 10
+    clock.mono = 510
     pause.wait_if_paused()
 
-    assert clock.waits == [30, 20]
+    assert clock.waited == 30 + 20
 
 def test_waits_are_logged_as_warnings(clock):
     # the default log level is WARNING, and a run that stands still for minutes must say why
@@ -277,22 +286,65 @@ def test_back_off_after_a_server_error_can_be_cancelled_too(clock):
     with pytest.raises(RequestsCancelled):
         retry.sleep()
 
-    assert clock.waits == [2]
+    assert clock.waited == 2
 
 def test_each_fetch_shares_the_runs_waits_but_is_cancelled_on_its_own(clock):
     run = clock.pause()
     fetch = run.scope()
 
-    fetch.wait(30)                         # a worker of the fetch waits out a limit
-    clock.mono += 10
-    run.wait_if_paused()                   # the run's next request holds back meanwhile
+    fetch.wait(30)                         # a worker of the fetch waits out a limit, until 530
+    clock.mono = 510                       # ten seconds into that wait, the fetch ends
     fetch.cancel()
     with pytest.raises(RequestsCancelled):
-        fetch.wait_if_paused()
-    clock.mono += 20
-    run.wait_if_paused()                   # the client's later requests are not cancelled
+        fetch.wait_if_paused()             # its other workers stop at once
+    run.wait_if_paused()                   # the client's later requests still hold back
 
-    assert clock.waits == [30, 20]
+    assert clock.waited == 30 + 20
+
+# ── Ctrl-C on the main thread ─────────────────────────────────────────────────
+class WindowsEvent(FakeEvent):
+    """An event as on Windows with Python 3.11-3.13: Ctrl-C can't cut its wait() short, so the
+    KeyboardInterrupt comes only once the wait returns."""
+
+    ctrl_c = 512.3   # when Ctrl-C is pressed, on the monotonic clock: 12.3 s into a wait
+
+    def wait(self, timeout=None):
+        cancelled = super().wait(timeout)
+        if self.clock.mono >= self.ctrl_c:
+            raise KeyboardInterrupt
+        return cancelled
+
+
+class LateEvent(FakeEvent):
+    """An event whose wait() returns a quarter of a second late, as on a busy machine."""
+
+    def wait(self, timeout=None):
+        self.clock.mono += 0.25
+        return super().wait(timeout)
+
+
+def test_waits_block_half_a_second_at_a_time(clock):
+    clock.pause().wait(60.25)
+
+    assert clock.waits == [0.5] * 120 + [0.25]
+
+def test_ctrl_c_on_windows_ends_a_wait_within_half_a_second():
+    # time.sleep stops at Ctrl-C there, an Event wait doesn't: a minute's wait on the main thread
+    # (one file to fetch, the review to post) held Ctrl-C back for the whole minute
+    clock = Clock(event=WindowsEvent)
+
+    with pytest.raises(KeyboardInterrupt):
+        clock.pause().wait(60)
+
+    assert WindowsEvent.ctrl_c <= clock.mono <= WindowsEvent.ctrl_c + 0.5
+
+def test_slices_that_end_late_do_not_stretch_the_wait():
+    # each one is measured against the deadline on the monotonic clock, not counted out
+    clock = Clock(event=LateEvent)
+
+    clock.pause().wait(60)
+
+    assert clock.mono == 560
 
 # ── urllib3 1.26 ──────────────────────────────────────────────────────────────
 def test_imports_with_urllib3_1_26(monkeypatch):
@@ -379,7 +431,7 @@ def test_fetch_waits_out_a_rate_limit_and_carries_on(api, clock):
     pr = client.fetch_pr(URL)
 
     assert [f.raw_content for f in pr.files] == ["x = 1\n", "x = 1\n"]
-    assert clock.waits[0] == 6
+    assert clock.waited >= 6   # b.py's worker may have held back meanwhile, on the same clock
     assert api.sent("/repos/o/r/contents/a.py") == 2
 
 def test_fetch_reports_a_limit_that_resets_too_late(api, clock):
@@ -424,7 +476,7 @@ def test_ctrl_c_ends_the_rate_limit_waits_of_a_parallel_fetch(api, monkeypatch):
     for name in ("a.py", "b.py", "c.py", "d.py"):
         api.add(f"/repos/o/r/contents/{name}", (429, {"Retry-After": "30"}, SLOW_DOWN), content(name))
 
-    def ctrl_c(futures, return_when):
+    def ctrl_c(futures, timeout=None, return_when=None):
         for _ in range(2):
             assert clock.events[-1].waiting.acquire(timeout=TIMEOUT)
         raise KeyboardInterrupt
@@ -437,7 +489,7 @@ def test_ctrl_c_ends_the_rate_limit_waits_of_a_parallel_fetch(api, monkeypatch):
     contents = [path for _, path in api.requests if "/contents/" in path]
     assert len(contents) == len(set(contents)) <= 2   # none sent again, and none of the queued
     assert {"/repos/o/r/contents/c.py", "/repos/o/r/contents/d.py"}.isdisjoint(contents)
-    assert clock.waits == [30, 30]
+    assert clock.waits == [0.5, 0.5]   # each worker's 30 s wait, ended in its first slice
 
 def test_limit_too_long_for_one_worker_ends_the_others_waits(api, monkeypatch):
     # b.py's limit is over the cap while a.py waits out its own: the error used to come only
@@ -464,7 +516,7 @@ def test_limit_too_long_for_one_worker_ends_the_others_waits(api, monkeypatch):
 
     assert excinfo.value.reset_time.timestamp() == NOW + 3600
     assert api.sent("/repos/o/r/contents/a.py") == 1
-    assert clock.waits == [30]
+    assert clock.waits == [0.5]   # a.py's 30 s wait, ended in its first slice
 
 def test_client_carries_on_after_a_failed_fetch(api, clock):
     # the failed fetch cancels its own waits, not the client's

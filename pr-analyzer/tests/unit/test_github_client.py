@@ -20,6 +20,7 @@ from pr_analyzer.exceptions import (
 )
 from pr_analyzer.github import client as client_module
 from pr_analyzer.github.client import GithubClient
+from pr_analyzer.github.ratelimit import WAIT_SLICE_SECONDS
 from pr_analyzer.models import PRSummary, Suggestion
 
 URL = "https://github.com/microsoft/vscode/pull/1"
@@ -344,7 +345,7 @@ def test_ctrl_c_ends_the_fetch_without_waiting_for_requests_in_flight(fake_githu
     for name in ("a.py", "b.py", "c.py", "d.py"):
         fake_github.add(name, slow)
 
-    def ctrl_c(futures, return_when):
+    def ctrl_c(futures, timeout=None, return_when=None):
         for _ in range(2):
             assert started.acquire(timeout=TIMEOUT)   # both workers are busy
         raise KeyboardInterrupt
@@ -360,6 +361,25 @@ def test_ctrl_c_ends_the_fetch_without_waiting_for_requests_in_flight(fake_githu
     for thread in in_flight:
         thread.join(TIMEOUT)
     assert sorted(path for path, _ in fake_github.requests) == ["a.py", "b.py"]   # none queued
+
+def test_the_wait_for_the_workers_is_sliced(fake_github, monkeypatch):
+    # on Windows (Python 3.11-3.13) one long wait on the main thread holds Ctrl-C back until it
+    # ends, so the fetch used to finish, rate-limit waits included, before stopping
+    monkeypatch.setattr(settings, "github_max_workers", 2)
+    for name in ("a.py", "b.py", "c.py"):
+        fake_github.add(name)
+    timeouts = []
+    real_wait = client_module.wait
+
+    def recording(futures, timeout=None, return_when=None):
+        timeouts.append(timeout)
+        return real_wait(futures, timeout=timeout, return_when=return_when)
+
+    monkeypatch.setattr(client_module, "wait", recording)
+    pr = GithubClient(token="t").fetch_pr(URL)
+
+    assert [f.raw_content for f in pr.files] == ["x = 1\n"] * 3
+    assert timeouts and all(t == WAIT_SLICE_SECONDS for t in timeouts)
 
 # ── content cache ─────────────────────────────────────────────────────────────
 def test_cached_contents_are_not_fetched_again(fake_github, tmp_path):
@@ -457,12 +477,12 @@ def test_post_review_needs_token():
 # ── repeat runs on the same PR ────────────────────────────────────────────────
 MARKER = "<!-- pr-analyzer -->"
 
-def finding(title="Risky call", line=3):
+def finding(title="Risky call", line=3, description="Details."):
     return Suggestion(filename="app.py", severity="HIGH", category="security",
-                      title=title, description="Details.", line=line)
+                      title=title, description=description, line=line)
 
-def posted_comment(title="Risky call", line=3):
-    return SimpleNamespace(path="app.py", line=line, body=f"**HIGH** — {title}\n\nDetails.")
+def posted_comment(title="Risky call", line=3, description="Details."):
+    return SimpleNamespace(path="app.py", line=line, body=f"**HIGH** — {title}\n\n{description}")
 
 def test_first_run_posts_a_tagged_summary_with_its_comments(github):
     GithubClient(token="t").post_review(make_pr_summary(), "summary", [(finding(), 3)])
@@ -533,3 +553,78 @@ def test_rate_limit_on_our_summary_is_not_taken_for_another_accounts_review(gith
         GithubClient(token="t").post_review(make_pr_summary(), "new", [(finding(), 3)])
 
     github.pr.create_review.assert_not_called()
+
+# ── comments an earlier version posted ────────────────────────────────────────
+# Versions put zero-width spaces in different places: the one before 0.1.0 put one after every
+# "]", "<" and "@", in code too. Compared byte for byte, its comments looked new to the first run
+# after an upgrade, which posted them again.
+@pytest.mark.parametrize("description, as_posted", [
+    # as the version before 0.1.0 posted them
+    ("Index with `rows[0]` instead of looping.", "Index with `rows[0]\u200b` instead of looping."),
+    ("```suggestion\nuser = data['users'][0]\n```",
+     "```suggestion\nuser = data['users']\u200b[0]\u200b\n```"),
+    ("Check that a < b before dividing.", "Check that a <\u200b b before dividing."),
+    # as 0.1.0 posted it
+    ("Ask @alice if `rows[0]` can be empty, see #12.",
+     "Ask @\u200balice if `rows[0]` can be empty, see #\u200b12."),
+])
+def test_comment_an_earlier_version_posted_counts_as_posted(github, description, as_posted):
+    github.pr.get_reviews.return_value = [MagicMock(body=f"old\n\n{MARKER}")]
+    github.pr.get_review_comments.return_value = [posted_comment(description=as_posted)]
+
+    GithubClient(token="t").post_review(
+        make_pr_summary(), "summary", [(finding(description=description), 3)]
+    )
+
+    github.pr.create_review.assert_not_called()
+
+def test_later_versions_still_find_the_comment_0_1_0_posted(github, monkeypatch):
+    # say a later version breaks every "]" again, in code too
+    neutralise = client_module.neutralise
+    monkeypatch.setattr(client_module, "neutralise",
+                        lambda text: neutralise(text).replace("]", "]\u200b"))
+    github.pr.get_reviews.return_value = [MagicMock(body=f"old\n\n{MARKER}")]
+    github.pr.get_review_comments.return_value = [
+        posted_comment(description="Ask @\u200balice if `rows[0]` can be empty, see #\u200b12.")
+    ]
+
+    GithubClient(token="t").post_review(
+        make_pr_summary(), "summary",
+        [(finding(description="Ask @alice if `rows[0]` can be empty, see #12."), 3)]
+    )
+
+    github.pr.create_review.assert_not_called()
+
+def test_line_endings_and_spaces_at_line_ends_do_not_make_a_comment_new(github):
+    # as 0.1.0 posted a description with \r\n line endings and spaces at the end of a line: the
+    # same text without them says the same
+    github.pr.get_reviews.return_value = [MagicMock(body=f"old\n\n{MARKER}")]
+    github.pr.get_review_comments.return_value = [
+        posted_comment(description="First this.  \r\nThen that.\r\n")
+    ]
+
+    GithubClient(token="t").post_review(
+        make_pr_summary(), "summary", [(finding(description="First this.\nThen that."), 3)]
+    )
+
+    github.pr.create_review.assert_not_called()
+
+# a suggestion that differs in anything else is another suggestion, and gets a comment of its own
+@pytest.mark.parametrize("as_posted", [
+    "**HIGH** — Risky call\n\n```suggestion\n    return rows[1]\n```",     # other code
+    "**HIGH** — Risky call\n\n```suggestion\nreturn rows[0]\n```",         # other indentation
+    "**HIGH** — Risky call\n\n```suggestion\n    return  rows[0]\n```",    # other spacing
+    "**HIGH** — Risky call\n\n```suggestion\n    return rows[0]\n\n```",   # another line
+    "**HIGH** — Risky call\n\n```suggestion\n    return\n    rows[0]\n```",   # other lines
+    "**MEDIUM** — Risky call\n\n```suggestion\n    return rows[0]\n```",   # another severity
+])
+def test_a_comment_that_says_something_else_does_not_count_as_posted(github, as_posted):
+    github.pr.get_reviews.return_value = [MagicMock(body=f"old\n\n{MARKER}")]
+    github.pr.get_review_comments.return_value = [
+        SimpleNamespace(path="app.py", line=3, body=as_posted)
+    ]
+    suggestion = finding(description="```suggestion\n    return rows[0]\n```")
+
+    GithubClient(token="t").post_review(make_pr_summary(), "summary", [(suggestion, 3)])
+
+    assert [c["line"] for c in github.pr.create_review.call_args.kwargs["comments"]] == [3]

@@ -93,6 +93,12 @@ runs:
         EXTRAS: ${{ inputs.extras }}
       run: |
         set -eo pipefail
+        # A PYTHON* variable from the job, such as a PYTHONPATH that points at the PR's own code,
+        # would reach every Python process started here. -I keeps it from the two python
+        # commands below, but not from the processes they start, such as the Python that pip
+        # runs to install build dependencies: unset them all, except the PYTHON this step sets.
+        for var in "${!PYTHON@}"; do [ "$var" = PYTHON ] || unset "$var"; done
+
         extras="${EXTRAS// /}"
         IFS=',' read -r -a requested <<< "$extras"
         for extra in "${requested[@]}"; do
@@ -104,7 +110,7 @@ runs:
 
         # The workspace may hold the PR's own code, and `python -m` looks in the current
         # directory first, so a pip.py there would run in place of pip: install from outside
-        # it, with Python isolated (-I) from the current directory and PYTHON* variables.
+        # it, and with -I, so that neither command looks in the current directory at all.
         cd "$RUNNER_TEMP"
         venv="$RUNNER_TEMP/pr-analyzer-venv"
         "$PYTHON" -I -m venv "$venv"
@@ -129,6 +135,11 @@ runs:
         CONFIG: ${{ inputs.config }}
       run: |
         set -uo pipefail
+        # A PYTHON* variable from the job, such as a PYTHONPATH that points at the PR's own code,
+        # would reach pr-analyzer, which runs without -I, and Semgrep and pip-audit, which get
+        # its environment: unset them all, since this step sets none.
+        for var in "${!PYTHON@}"; do unset "$var"; done
+
         flag() {   # true/false input -> the matching option
           case "$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')" in
             true) echo "$3" ;;
@@ -152,8 +163,8 @@ runs:
         fi
 
         # pr-analyzer reads a .env file from its working directory, and the workspace may hold
-        # the PR's own code: run from an empty directory instead. Python also gets -I, so it
-        # never looks for modules in the current directory, wherever that is.
+        # the PR's own code: run from an empty directory instead. The python commands below
+        # also get -I, so they never look for modules in the current directory, wherever it is.
         mkdir -p "$RUNNER_TEMP/pr-analyzer-run"
         cd "$RUNNER_TEMP/pr-analyzer-run" || exit 2
         report="$RUNNER_TEMP/pr-analyzer-report.json"

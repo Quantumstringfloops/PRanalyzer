@@ -21,8 +21,9 @@ from pr_analyzer.exceptions import (
     RateLimitError,
     RepositoryNotFoundError,
 )
-from pr_analyzer.github.markdown import neutralise, neutralise_line
+from pr_analyzer.github.markdown import comparable, neutralise, neutralise_line
 from pr_analyzer.github.ratelimit import (
+    WAIT_SLICE_SECONDS,
     RateLimitExceeded,
     RateLimitPause,
     RateLimitRetry,
@@ -210,8 +211,13 @@ class GithubClient:
         )
         try:
             futures = [pool.submit(fetch, file) for file in files]
-            # a failure is raised as soon as it happens, not once the files before it are in
-            wait(futures, return_when=FIRST_EXCEPTION)
+            # a failure is raised as soon as it happens, not once the files before it are in. The
+            # wait is sliced: on Windows one long wait would hold Ctrl-C back until it ended.
+            pending = set(futures)
+            while pending:
+                done, pending = wait(pending, timeout=WAIT_SLICE_SECONDS, return_when=FIRST_EXCEPTION)
+                if any(f.exception() is not None for f in done):
+                    break
             errors = [e for f in futures if f.done() and (e := f.exception()) is not None]
             if errors:
                 raise errors[0]
@@ -315,10 +321,12 @@ class GithubClient:
             # every push re-runs the analysis, and each run used to add a whole new review that
             # repeated every comment. Skip findings already commented on (GitHub clears `line`
             # once the code under a comment changes, so those get a fresh comment) and update the
-            # earlier summary in place.
-            posted = {(c.path, c.line, c.body.strip()) for c in pull.get_review_comments()}
+            # earlier summary in place. Bodies are compared in comparable() form, so a comment
+            # an earlier version posted, with its zero-width spaces elsewhere, still counts.
+            posted = {(c.path, c.line, comparable(c.body)) for c in pull.get_review_comments()}
             review_comments = [
-                c for c in review_comments if (c["path"], c["line"], c["body"].strip()) not in posted
+                c for c in review_comments
+                if (c["path"], c["line"], comparable(c["body"])) not in posted
             ]
             if not self._update_summary(pull, summary):
                 review_comments = self._create_review(pull, commit, summary, review_comments)
