@@ -79,20 +79,41 @@ def explained_number(code: str, match: re.Match[str]) -> bool:
     )
 
 
+# A to-do marker in code can be a name, such as a task status, rather than a note. It is one
+# right after "." or "::" (a member), "case " (a case label), or a name and "(" or "[" (an argument
+# or an index); after "=", "," or "{" and at most one space (a value, an item or a key); before
+# "=" or "," (assigned, compared or an item); or before ":" and a string, a number, "{" or "["
+# (a key on a line of its own). NAME_BEFORE is all lookbehinds: no text before a marker is read.
+NAME_BEFORE = re.compile(r"(?<=\.)|(?<=::)|(?<=\bcase\s)|(?<=\w[(\[])|(?<=[=,{])|(?<=[=,{]\s)")
+NAME_AFTER = re.compile(r"\s*(?:[=,]|:\s*[\"'`\d{\[])")
+
+
+def used_as_name(code: str, match: re.Match[str]) -> bool:
+    """A to-do marker that names something in code. One followed by "(" always counts as a
+    marker: it calls Kotlin's function for unfinished code, or starts a note naming its owner."""
+    start, end = match.span()
+    if code.startswith("(", end):
+        return False
+    return NAME_BEFORE.match(code, start) is not None or NAME_AFTER.match(code, end) is not None
+
+
 # Each rule runs on one added line at a time (the text after the leading "+"). Its "id" is the
 # stable name .pr-analyzer.toml uses to switch it off. Its "scope" picks the views of the line it
 # reads (see line_lexer): "code" leaves out comments and the contents of strings, "code+comments"
-# only the contents of strings. An optional "exempt" callable can wave off individual matches.
-# Hardcoded secrets are not checked here: the security scanner owns them, and checking them in
-# both places used to penalise the same line twice.
+# only the contents of strings. An optional "skip_if" regex skips a line and an optional "exempt"
+# callable waves off individual matches; both look at code only, as every match in a comment
+# counts. Hardcoded secrets are not checked here: the security scanner owns them, and checking
+# them in both places used to penalise the same line twice.
 PATTERNS: list[dict[str, Any]] = [
     {
         "id": "todo-comment",
         "regex": re.compile(r"\b(TODO|FIXME)\b"),
         "extensions": CODE_EXTENSIONS,
         # In a string the marker is data, such as a status value, not a note to the team. The
-        # middle lines of a docstring or a /* */ comment read as code, so code counts too.
+        # middle lines of a docstring or a /* */ comment read as code, so code counts too, apart
+        # from a marker that code uses as a name.
         "scope": "code+comments",
+        "exempt": used_as_name,
         "severity": "LOW",
         "category": "style",
         "title": "TODO/FIXME comment added",
@@ -306,8 +327,9 @@ def patterns_for(filename: str, disabled: Collection[str] = ()) -> list[dict[str
 
 
 def line_matches(pattern: dict[str, Any], parts: LineParts) -> bool:
-    views = (parts.code, parts.comments) if pattern["scope"] == "code+comments" else (parts.code,)
-    return any(view_matches(pattern, view) for view in views)
+    if pattern["scope"] == "code+comments" and pattern["regex"].search(parts.comments):
+        return True   # skip_if and exempt are about code: in a comment every match counts
+    return view_matches(pattern, parts.code)
 
 
 def view_matches(pattern: dict[str, Any], text: str) -> bool:

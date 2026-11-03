@@ -212,6 +212,36 @@ def test_todo_in_docstrings_and_comment_bodies(line, filename):
     # only # and // comments used to count, so these notes went unreported
     assert rules_for(line, filename) == ["todo-comment"]
 
+@pytest.mark.parametrize("line, filename", [
+    ('    TODO = "todo"', "status.py"),                     # an enum member
+    ("if task.status == Status.TODO:", "board.py"),         # a member
+    ("case Status.TODO: return 1;", "board.ts"),
+    ("let next = Status::FIXME;", "board.rs"),
+    ("const x = { TODO: 1 };", "board.js"),                 # a key
+    ('  TODO: "todo",', "status.js"),                       # a key on a line of its own
+    ("enum Status { TODO, DOING, DONE }", "Status.java"),   # an item
+    ("    TODO,", "Status.java"),
+    ("open = [t for t in tasks if t.status == TODO]", "board.py"),   # a value
+    ("case TODO:", "Board.java"),                           # a case label
+    ("setStatus(TODO);", "board.js"),                       # an argument
+    ("count = counts[FIXME]", "board.py"),                  # an index
+    ('label = f"{TODO}"', "board.py"),                      # in an f-string's field
+])
+def test_todo_used_as_a_name_is_not_flagged(line, filename):
+    # a task tracker's statuses each got a finding and an inline comment
+    assert "todo-comment" not in rules_for(line, filename)
+
+@pytest.mark.parametrize("line, filename", [
+    ("    TODO(neil): handle v2.", "parse.py"),             # a note naming its owner
+    ("fun load(): Int = TODO()", "Loader.kt"),              # Kotlin's call for unfinished code
+    ("    Reads the header (TODO).", "parse.py"),
+    ("    3. [FIXME] read the diff", "parse.py"),
+    ("    trace_config: TODO", "parse.py"),
+    ("x = Status.TODO  # FIXME: rename", "board.py"),       # in a comment every marker counts
+])
+def test_todo_notes_next_to_code_punctuation_are_still_flagged(line, filename):
+    assert rules_for(line, filename) == ["todo-comment"]
+
 @pytest.mark.parametrize("line, filename, rule", [
     ('f"{' * 21 + "x" + '}"' * 21 + ";print(y)", "calc.py", "print-call"),
     ("`${" * 21 + "x" + "}`" * 21 + ";console.log(y)", "view.js", "console-log"),
