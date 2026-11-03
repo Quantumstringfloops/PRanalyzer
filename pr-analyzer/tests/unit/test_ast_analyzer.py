@@ -1,9 +1,13 @@
+import re
+
 import pytest
 from tree_sitter import Parser
 
 from pr_analyzer.analyzer.ast_analyzer import (
     PATTERNS,
+    RULE_IDS,
     StaticAnalyzer,
+    Thresholds,
     count_complexity,
     get_language,
     iter_functions,
@@ -170,3 +174,118 @@ def test_severities_are_valid():
     # a misspelt severity ("MEDUIM") used to crash the scorer
     assert {p["severity"] for p in PATTERNS} <= SEVERITIES
     assert {s.severity for s in analyzer.analyze([added_file(branches(31))])} <= SEVERITIES
+
+# ── strings and comments ──────────────────────────────────────────────────────
+def rules_for(line: str, filename: str = "app.py") -> list[str]:
+    return [s.rule_id for s in analyzer.analyze([make_file(f"@@ -0,0 +1,1 @@\n+{line}", filename)])]
+
+@pytest.mark.parametrize("line, filename", [
+    ('log.info("call print(x) to see it")', "app.py"),
+    ("x = 1  # print(x) while debugging", "app.py"),
+    ('"""Use print(x) to debug."""', "app.py"),
+    ('const hint = "use console.log(x)";', "app.js"),
+    ("run();  // console.log(x)", "app.js"),
+    ("run(); /* console.log(x) */", "app.ts"),
+])
+def test_calls_inside_strings_and_comments_are_not_flagged(line, filename):
+    assert rules_for(line, filename) == []
+
+def test_a_call_after_a_string_is_still_flagged():
+    assert rules_for('label = "#"; print(label)') == ["print-call"]
+
+def test_todo_counts_only_in_comments():
+    assert rules_for('status = "TODO"') == []
+    assert rules_for("x = 1  # TODO: tidy") == ["todo-comment"]
+    assert rules_for("run();  // FIXME later", "app.js") == ["todo-comment"]
+    assert rules_for("run(); /* TODO */", "app.ts") == ["todo-comment"]
+
+# ── magic numbers ─────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("line, filename", [
+    ("requests.get(url, timeout=25)", "app.py"),         # a keyword argument names it
+    ("def fetch(url, retries=25) -> None:", "app.py"),   # so does a default value
+    ("limit = 25", "app.py"),                             # and an assignment
+    ('settings = {"retries": 25}', "app.py"),             # and a dict key
+    ("const options = { retries: 25 };", "app.js"),       # and an object property
+    ("_LIMIT = 25", "app.py"),                            # a private constant is a constant too
+    ("time.sleep(60)", "app.py"),                         # well-known values
+    ("size = chunk * 1024", "app.py"),
+    ("abort(404)", "app.py"),
+    ("res.status(418).end();", "app.js"),
+    ("prefix = line[:25]", "app.py"),                     # slices and indexes
+    ("last = parts[-12]", "app.py"),
+    ("if sys.version_info >= (3, 11):", "app.py"),         # a version check names its numbers
+    ('log.info("retried 25 times")', "app.py"),           # numbers in strings and comments
+    ("retry()  # at most 25 times", "app.py"),
+])
+def test_explained_numbers_are_not_magic(line, filename):
+    assert "magic-number" not in rules_for(line, filename)
+
+@pytest.mark.parametrize("line", [
+    "wait(25)",
+    "if attempts > 25:",
+    "return 42",
+    "sizes = [25, 50]",      # a list literal isn't an index
+    "if count == 25:",       # a comparison doesn't name its number
+    "total += 25",
+])
+def test_unexplained_numbers_are_still_flagged(line):
+    assert "magic-number" in rules_for(line)
+
+# ── rule ids ──────────────────────────────────────────────────────────────────
+def test_rule_ids_are_unique_and_kebab_case():
+    # they are what .pr-analyzer.toml's `disable` list names, so they must stay stable
+    assert len(RULE_IDS) == len(set(RULE_IDS))
+    assert all(re.fullmatch(r"[a-z]+(-[a-z]+)*", rule) for rule in RULE_IDS)
+
+def test_findings_carry_their_rule_id():
+    file = make_file("@@ -0,0 +1,2 @@\n+# TODO: fix this later\n+" + "x" * 130)
+    assert [s.rule_id for s in analyzer.analyze([file])] == ["todo-comment", "long-line"]
+
+def test_disabled_rules_are_skipped():
+    file = make_file("@@ -0,0 +1,2 @@\n+print(x)  # TODO\n+wait(30)", filename="app.py")
+    found = analyzer.analyze([file], disabled={"print-call", "magic-number"})
+    assert [s.rule_id for s in found] == ["todo-comment"]
+
+def test_tree_sitter_checks_can_be_disabled():
+    file = added_file(branches(31) + "x = 1\n" * 500)
+    rules = {s.rule_id for s in analyzer.analyze([file], disabled={"complexity", "file-length"})}
+    assert not rules & {"complexity", "file-length"}
+
+# ── thresholds ────────────────────────────────────────────────────────────────
+def test_line_length_limit_is_configurable():
+    file = make_file("@@ -0,0 +1,1 @@\n+" + "x" * 90, filename="app.py")
+    assert analyzer.analyze([file]) == []
+    [result] = analyzer.analyze([file], thresholds=Thresholds(max_line_length=80))
+    assert (result.rule_id, result.title) == ("long-line", "Line exceeds 80 characters")
+
+def test_complexity_thresholds_are_configurable():
+    file = added_file(branches(6))   # complexity 7
+    assert complexity_findings(analyzer.analyze([file])) == []
+
+    [medium] = complexity_findings(analyzer.analyze([file], thresholds=Thresholds(complexity_medium=5)))
+    [high] = complexity_findings(
+        analyzer.analyze([file], thresholds=Thresholds(complexity_medium=4, complexity_high=6))
+    )
+
+    assert (medium.severity, medium.rule_id) == ("MEDIUM", "complexity")
+    assert "above 5" in medium.description
+    assert high.severity == "HIGH"
+
+def test_file_already_too_long_is_not_blamed_on_the_pr():
+    # a long file used to be reported on every PR that touched it, whatever the change
+    code = "x = 1\n" * 30
+    file = make_file("@@ -30,0 +31,1 @@\n+y = 2", "app.py", code + "y = 2\n")
+    assert analyzer.analyze([file], thresholds=Thresholds(max_file_lines=10)) == []
+
+def test_pr_that_makes_a_file_too_long_is_told():
+    code = "x = 1\n" * 12
+    file = make_file("@@ -9,0 +10,3 @@\n+x = 1\n+x = 1\n+x = 1", "app.py", code)
+    [result] = analyzer.analyze([file], thresholds=Thresholds(max_file_lines=10))
+    assert result.rule_id == "file-length"
+    assert "from 9 to 12 lines, past the limit of 10" in result.description
+
+def test_file_length_limit_is_configurable():
+    file = added_file("x = 1\n" * 20)
+    assert analyzer.analyze([file]) == []
+    [result] = analyzer.analyze([file], thresholds=Thresholds(max_file_lines=10))
+    assert (result.rule_id, result.title) == ("file-length", "File too long")

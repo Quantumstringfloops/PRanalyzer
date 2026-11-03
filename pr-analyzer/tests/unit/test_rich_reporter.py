@@ -68,6 +68,13 @@ def test_json_output_is_valid():
     assert "pr" in parsed
     assert parsed["warnings"] == ["Semgrep scan skipped: semgrep is not installed"]
 
+def test_json_names_each_findings_rule():
+    # the rule id is what a .pr-analyzer.toml `disable` list takes
+    s = Suggestion(filename="a.py", severity="LOW", category="style", title="Possible magic number",
+                   description="d", line=3, rule_id="magic-number")
+    parsed = json.loads(capture_print(lambda: reporter.print_json_report(make_result(suggestions=[s]))))
+    assert parsed["suggestions"][0]["rule"] == "magic-number"
+
 # ── Rich output does not crash on empty suggestions ───────────────────────────
 def test_rich_report_empty_suggestions_no_exception():
     result = make_result(suggestions=[])

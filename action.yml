@@ -1,0 +1,191 @@
+name: PR Analyzer
+description: Score a pull request with static checks, security scanning and an optional LLM review, and post the result as a review
+author: Neil Mathew
+branding:
+  icon: check-circle
+  color: blue
+
+# The action installs pr-analyzer from its own checkout, so the action and the code always match,
+# whether a workflow uses a tag, a branch or a commit. It reads the PR through the GitHub API and
+# needs no checkout of its own.
+inputs:
+  github-token:
+    description: >-
+      Token that reads the pull request and posts the review. Posting needs the
+      `pull-requests: write` permission.
+    required: false
+    default: ${{ github.token }}
+  pr-url:
+    description: The pull request to analyse. Defaults to the one that triggered a pull_request workflow.
+    required: false
+    default: ${{ github.event.pull_request.html_url }}
+  llm-provider:
+    description: openai, anthropic or ollama. Empty, the default, skips the LLM review. With a provider but no key, the review notes that the LLM step was skipped.
+    required: false
+    default: ""
+  llm-model:
+    description: Model to use; empty means the provider's default.
+    required: false
+    default: ""
+  openai-api-key:
+    description: API key for llm-provider openai, e.g. secrets.OPENAI_API_KEY.
+    required: false
+    default: ""
+  anthropic-api-key:
+    description: API key for llm-provider anthropic, e.g. secrets.ANTHROPIC_API_KEY.
+    required: false
+    default: ""
+  post-review:
+    description: Post the result as a review on the pull request (true or false).
+    required: false
+    default: "true"
+  fail-on-block:
+    description: Fail the step when the pull request is blocked (true or false).
+    required: false
+    default: "true"
+  config:
+    description: >-
+      Settings file to use instead of .pr-analyzer.toml from the PR's base branch, relative to
+      the workspace. On pull_request events a checked-out workspace is the PR's own code, so a PR
+      could edit this file and loosen its own checks: leave it empty unless the file comes from
+      somewhere the PR can't change.
+    required: false
+    default: ""
+  extras:
+    description: Optional parts to install, comma-separated - security (Semgrep and pip-audit), openai, anthropic.
+    required: false
+    default: security
+  python-version:
+    description: Python version to run pr-analyzer with (3.11 or newer).
+    required: false
+    default: "3.12"
+
+outputs:
+  score:
+    description: Overall score, 0 to 100.
+    value: ${{ steps.analyze.outputs.score }}
+  grade:
+    description: Letter grade, A+ to F.
+    value: ${{ steps.analyze.outputs.grade }}
+  passed:
+    description: true if the pull request passed, false if it was blocked.
+    value: ${{ steps.analyze.outputs.passed }}
+
+runs:
+  using: composite
+  # actions are pinned to commits, since a tag can be moved to different code; the comment names
+  # the release. Every input reaches the scripts through env:, never pasted into them.
+  steps:
+    - name: Set up Python
+      id: python
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+      with:
+        python-version: ${{ inputs.python-version }}
+        # leave the Python that the rest of the caller's job uses alone
+        update-environment: false
+
+    - name: Install pr-analyzer
+      id: install
+      shell: bash
+      env:
+        PYTHON: ${{ steps.python.outputs.python-path }}
+        SOURCE: ${{ github.action_path }}/pr-analyzer
+        EXTRAS: ${{ inputs.extras }}
+      run: |
+        set -eo pipefail
+        extras="${EXTRAS// /}"
+        IFS=',' read -r -a requested <<< "$extras"
+        for extra in "${requested[@]}"; do
+          case "$extra" in
+            security|openai|anthropic) ;;
+            *) echo "::error::Unknown extra '$extra': use security, openai or anthropic"; exit 1 ;;
+          esac
+        done
+
+        venv="$RUNNER_TEMP/pr-analyzer-venv"
+        "$PYTHON" -m venv "$venv"
+        bin="$venv/bin"
+        [ -d "$bin" ] || bin="$venv/Scripts"
+        "$bin/python" -m pip install --quiet --disable-pip-version-check "$SOURCE${extras:+[$extras]}"
+        echo "bin=$bin" >> "$GITHUB_OUTPUT"
+
+    - name: Analyse the pull request
+      id: analyze
+      shell: bash
+      env:
+        PR_ANALYZER_BIN: ${{ steps.install.outputs.bin }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PR_URL: ${{ inputs.pr-url }}
+        LLM_PROVIDER: ${{ inputs.llm-provider }}
+        LLM_MODEL: ${{ inputs.llm-model }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        POST_REVIEW: ${{ inputs.post-review }}
+        FAIL_ON_BLOCK: ${{ inputs.fail-on-block }}
+        CONFIG: ${{ inputs.config }}
+      run: |
+        set -uo pipefail
+        flag() {   # true/false input -> the matching option
+          case "$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')" in
+            true) echo "$3" ;;
+            false) echo "$4" ;;
+            *) echo "::error::$1 must be true or false, not '$2'" >&2; return 1 ;;
+          esac
+        }
+        if [ -z "$PR_URL" ]; then
+          echo "::error::No pull request to analyse: run on pull_request events or set pr-url"
+          exit 2
+        fi
+        args=(analyze "$PR_URL" --output json)
+        review="$(flag post-review "$POST_REVIEW" --post-review "")" || exit 2
+        block="$(flag fail-on-block "$FAIL_ON_BLOCK" --fail-on-block --no-fail-on-block)" || exit 2
+        [ -n "$review" ] && args+=("$review")
+        args+=("$block")
+        [ -z "$LLM_PROVIDER" ] && args+=(--skip-llm)
+        if [ -n "$CONFIG" ]; then
+          case "$CONFIG" in /*) ;; *) CONFIG="$GITHUB_WORKSPACE/$CONFIG" ;; esac
+          args+=(--config "$CONFIG")
+        fi
+
+        # pr-analyzer reads a .env file from its working directory, and the workspace may hold
+        # the PR's own code: run from an empty directory instead
+        mkdir -p "$RUNNER_TEMP/pr-analyzer-run"
+        cd "$RUNNER_TEMP/pr-analyzer-run" || exit 2
+        report="$RUNNER_TEMP/pr-analyzer-report.json"
+
+        # The log shows text shaped by the PR (finding titles, file names, error messages), which
+        # must not be read as workflow commands such as ::error:: while it is printed.
+        token="$("$PR_ANALYZER_BIN/python" -c 'import secrets; print(secrets.token_hex(16))')"
+        echo "::stop-commands::$token"
+        status=0
+        "$PR_ANALYZER_BIN/pr-analyzer" "${args[@]}" > "$report" || status=$?
+        if [ -s "$report" ]; then
+          "$PR_ANALYZER_BIN/python" - "$report" <<'EOF'
+        import json, os, sys
+
+        def line(text):
+            return " ".join(str(text).split())   # nothing from the PR may start a new log line
+
+        with open(sys.argv[1], encoding="utf-8") as handle:
+            report = json.load(handle)
+        score = report["score"]
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as outputs:
+            outputs.write(f"score={score['overall']}\ngrade={score['grade']}\n"
+                          f"passed={str(score['passed']).lower()}\n")
+        verdict = "passed" if score["passed"] else "BLOCKED"
+        print(f"pr-analyzer: {score['overall']} ({score['grade']}), {verdict}: {line(score['summary'])}")
+        for s in report["suggestions"]:
+            where = f"{s['filename']}:{s['line']}" if s["line"] else s["filename"]
+            print(f"  {s['severity']:<8} {line(where)}  {line(s['title'])}  [{s['rule']}]")
+        for warning in report["warnings"]:
+            print(f"  note: {line(warning)}")
+        EOF
+        fi
+        echo "::$token::"
+
+        case "$status" in
+          0) ;;
+          1) echo "::error::The pull request is blocked; see the findings above" ;;
+          *) echo "::error::pr-analyzer could not analyse the pull request (exit $status)" ;;
+        esac
+        exit "$status"

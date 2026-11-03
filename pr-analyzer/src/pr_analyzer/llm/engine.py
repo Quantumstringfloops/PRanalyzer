@@ -4,9 +4,12 @@ import re
 import httpx
 import structlog
 
+from pr_analyzer.cache import DiskCache
 from pr_analyzer.config import settings
 from pr_analyzer.exceptions import ConfigError, LLMError
-from pr_analyzer.llm.prompts import CATEGORIES, SEVERITIES, SYSTEM_PROMPT, build_prompt
+from pr_analyzer.llm import review
+from pr_analyzer.llm.chunking import review_requests
+from pr_analyzer.llm.prompts import CATEGORIES, SEVERITIES, SYSTEM_PROMPT
 from pr_analyzer.models import PRSummary, Suggestion
 
 log = structlog.get_logger(__name__)
@@ -29,12 +32,21 @@ CATEGORY_ALIASES = {
 }
 # keys a model might wrap its list of suggestions in
 WRAPPER_KEYS = ("suggestions", "issues", "findings", "results", "comments")
+# the stage's id in .pr-analyzer.toml
+LLM_RULE = "llm"
+FENCED = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
+# part of every cached reply's key; bump it when the way requests are made changes
+REPLY_FORMAT = "1"
 
 
 class LLMEngine:
 
-    def __init__(self, transport: httpx.BaseTransport | None = None):
+    def __init__(
+        self, transport: httpx.BaseTransport | None = None, cache: DiskCache | None = None
+    ):
         self.transport = transport   # lets tests swap in a fake HTTP layer for Ollama
+        self.cache = cache if cache is not None else DiskCache.disabled()
+        self.warnings: list[str] = []   # parts of the review that were skipped
 
     def analyze(self, pr: PRSummary, existing_findings: list[Suggestion]) -> list[Suggestion]:
         # can take any provider
@@ -49,18 +61,30 @@ class LLMEngine:
                 f"Unknown LLM_PROVIDER {settings.llm_provider!r}: use ollama, openai or anthropic"
             )
 
-        prompt = build_prompt(pr, existing_findings, settings.max_diff_lines)
-        raw = callers[provider](prompt)
+        # one request for a diff of up to MAX_DIFF_LINES lines, as before; a bigger diff is split
+        # over several, within LLM_TOKEN_BUDGET, and replies come from the cache where they can
+        self.warnings = []
+        requests = review_requests(pr, existing_findings, settings.max_diff_lines)
+        replies, self.warnings = review.review(
+            requests,
+            callers[provider],
+            self.cache,
+            cache_key=lambda prompt: self.cache_key(provider, prompt),
+            keep=self.is_json_reply,
+        )
 
-        items = self.parse_response(raw)
+        items = [item for raw in replies for item in self.parse_response(raw)]
         suggestions = [s for s in (self.to_suggestion(item, pr) for item in items) if s is not None]
         suggestions = self.filter_confidence(suggestions)
         suggestions = self.filter_duplicates(suggestions, existing_findings)
+        if len(requests) > 1:
+            suggestions = self.filter_repeats(suggestions)
 
         log.info(
             "llm analysis complete",
             provider=provider,
             model=self.model_name(provider),
+            requests=len(requests),
             returned=len(items),
             kept=len(suggestions),
         )
@@ -70,12 +94,25 @@ class LLMEngine:
     def model_name(provider: str) -> str:
         return settings.llm_model or DEFAULT_MODELS[provider]
 
+    def cache_key(self, provider: str, prompt: str) -> tuple[str, ...]:
+        # everything that shapes the reply; the API keys don't, and stay out of the cache
+        endpoint = settings.ollama_url if provider == "ollama" else ""
+        return (REPLY_FORMAT, provider, self.model_name(provider), str(settings.llm_max_tokens),
+                endpoint, SYSTEM_PROMPT, prompt)
+
+    @classmethod
+    def is_json_reply(cls, raw: str) -> bool:
+        # only a reply that parses is worth keeping: a garbled one may come out right next time
+        text = (raw or "").strip()
+        fenced = FENCED.match(text)
+        return cls._load_json(fenced.group(1) if fenced else text) is not None
+
     def call_openai(self, prompt: str) -> str:
         try:
             import openai
         except ImportError as e:
             raise LLMError("LLM_PROVIDER=openai needs the openai package: "
-                           "pip install 'pr-analyzer[openai]'") from e
+                           "pip install 'pranalyzer[openai]'") from e
         if not settings.openai_api_key:
             raise LLMError("OPENAI_API_KEY is not set")
 
@@ -105,7 +142,7 @@ class LLMEngine:
             import anthropic
         except ImportError as e:
             raise LLMError("LLM_PROVIDER=anthropic needs the anthropic package: "
-                           "pip install 'pr-analyzer[anthropic]'") from e
+                           "pip install 'pranalyzer[anthropic]'") from e
         if not settings.anthropic_api_key:
             raise LLMError("ANTHROPIC_API_KEY is not set")
 
@@ -162,7 +199,7 @@ class LLMEngine:
     def parse_response(self, raw: str) -> list[dict]:
         text = (raw or "").strip()
         # tolerate ```json fences even though the prompt asks for bare JSON
-        fenced = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
+        fenced = FENCED.match(text)
         if fenced:
             text = fenced.group(1)
 
@@ -223,24 +260,26 @@ class LLMEngine:
         if category not in CATEGORIES:
             category = "style"
 
-        line = item.get("line", item.get("line_start"))
-        try:
-            line = int(line) if line is not None else None
-        except (TypeError, ValueError):
-            line = None
-        if line is not None and line < 1:
-            line = None
-
         return Suggestion(
             filename=filename,
             severity=severity,
             category=category,
             title=title[:200],
             description=str(item.get("description") or "").strip()[:2000],
-            line=line,
+            line=self._line_number(item),
             source="llm",
             confidence=confidence,
+            rule_id=LLM_RULE,
         )
+
+    @staticmethod
+    def _line_number(item: dict) -> int | None:
+        line = item.get("line", item.get("line_start"))
+        try:
+            line = int(line) if line is not None else None
+        except (TypeError, ValueError):
+            return None
+        return line if line is not None and line >= 1 else None
 
     @staticmethod
     def _match_filename(name, pr: PRSummary) -> str | None:
@@ -264,3 +303,15 @@ class LLMEngine:
     def filter_duplicates(self, suggestions: list[Suggestion], existing: list[Suggestion]) -> list[Suggestion]:
         existing_keys = {(e.filename, e.line, e.category) for e in existing}
         return [s for s in suggestions if (s.filename, s.line, s.category) not in existing_keys]
+
+    @staticmethod
+    def filter_repeats(suggestions: list[Suggestion]) -> list[Suggestion]:
+        # a file split over several requests can draw the same remark from each of them
+        seen: set[tuple[str, int | None, str]] = set()
+        kept = []
+        for s in suggestions:
+            key = (s.filename, s.line, s.category)
+            if key not in seen:
+                seen.add(key)
+                kept.append(s)
+        return kept

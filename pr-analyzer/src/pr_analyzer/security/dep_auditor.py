@@ -13,6 +13,9 @@ from pr_analyzer.security import tools
 
 log = structlog.get_logger(__name__)
 
+# the stage's id in .pr-analyzer.toml
+DEPENDENCY_AUDIT_RULE = "dependency-audit"
+
 # Only exact pins (`name==version`, optionally with extras or an environment marker) are audited.
 # Anything else - ranges, URLs, VCS links, -r/-e/--index-url options - is skipped: handing it to
 # pip would make the analyzer download and build packages chosen by the PR's author.
@@ -56,7 +59,7 @@ class DepAuditScanner:
             executable = tools.find_tool("pip-audit")
             if executable is None:
                 self._warn("Dependency audit skipped: pip-audit is not installed "
-                           "(pip install 'pr-analyzer[security]')")
+                           "(pip install 'pranalyzer[security]')")
                 break
 
             log.info("running pip-audit", filename=file.filename, packages=len(pins))
@@ -167,6 +170,7 @@ class DepAuditScanner:
                     description=f"{vuln_id}{alias_text}: {description}{fix_text}",
                     line=line,
                     source="security",
+                    rule_id=DEPENDENCY_AUDIT_RULE,
                 ))
         return suggestions
 

@@ -1,0 +1,128 @@
+name: Release
+
+# Pushing a version tag (v1.2.3) builds, tests and publishes the package to PyPI. Running the
+# workflow by hand builds the same way and publishes to TestPyPI instead, as a rehearsal.
+# Pull requests never trigger it.
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+# no access by default; each job asks for what it needs
+permissions: {}
+
+# two releases must not race each other
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read   # check out the tagged commit
+    # the Python project lives in pr-analyzer/, not at the repository root
+    defaults:
+      run:
+        working-directory: pr-analyzer
+
+    # actions are pinned to commits, since a tag can be moved to different code; the comment
+    # names the release
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry and twine
+        run: pip install "poetry>=2.2,<3" twine
+
+      - name: Check the tag matches the package version
+        if: github.event_name == 'push'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(poetry version --short)"
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Tag $TAG does not match version $version in pyproject.toml (expected v$version)"
+            exit 1
+          fi
+
+      - name: Check poetry.lock matches pyproject.toml
+        run: poetry check --lock
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --all-extras
+
+      - name: Run tests
+        run: poetry run pytest --tb=short
+
+      - name: Build
+        run: poetry build
+
+      - name: Check the distributions
+        run: twine check --strict dist/*
+
+      - name: Install the wheel and run it
+        run: |
+          python -m venv "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/bin/python" -m pip install dist/*.whl
+          "$RUNNER_TEMP/smoke/bin/pr-analyzer" version | tee "$RUNNER_TEMP/version.txt"
+          grep -qx "pr-analyzer $(poetry version --short)" "$RUNNER_TEMP/version.txt"
+
+      - name: Keep the distributions for the publish job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: dist
+          path: pr-analyzer/dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # PyPI Trusted Publishing: PyPI trusts this workflow in this environment, so no API token is
+    # stored anywhere. The environment can require a reviewer's approval in the repo settings.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pranalyzer/
+    permissions:
+      id-token: write   # the OIDC token PyPI exchanges for a short-lived upload token
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/pranalyzer/
+    permissions:
+      id-token: write   # the OIDC token TestPyPI exchanges for a short-lived upload token
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3
+        with:
+          repository-url: https://test.pypi.org/legacy/

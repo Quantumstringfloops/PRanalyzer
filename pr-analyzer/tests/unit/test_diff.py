@@ -1,4 +1,10 @@
-from pr_analyzer.diff import annotate_patch, commentable_lines, iter_added_lines, iter_new_lines
+from pr_analyzer.diff import (
+    annotate_patch,
+    commentable_lines,
+    count_changes,
+    iter_added_lines,
+    iter_new_lines,
+)
 
 PATCH = "\n".join([
     "@@ -10,4 +10,5 @@ def handler():",
@@ -36,3 +42,7 @@ def test_text_before_first_hunk_is_ignored():
 def test_annotate_patch_numbers_new_lines():
     lines = annotate_patch("@@ -1,2 +1,2 @@\n-old\n+new\n same").splitlines()
     assert lines == ["@@ -1,2 +1,2 @@", "      -old", "    1 +new", "    2  same"]
+
+def test_count_changes():
+    assert count_changes(PATCH) == (3, 1)
+    assert count_changes("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b") == (1, 1)

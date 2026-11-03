@@ -1,9 +1,10 @@
 import pytest
 from unittest.mock import patch
 from pr_analyzer import pipeline as pipeline_module
-from pr_analyzer.exceptions import InvalidTokenError, LLMError
+from pr_analyzer.exceptions import ConfigError, InvalidTokenError, LLMError
 from pr_analyzer.pipeline import AnalysisPipeline
 from pr_analyzer.models import PRSummary, FileChange, Suggestion
+from pr_analyzer.project_config import ProjectConfig
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -174,6 +175,30 @@ def test_llm_findings_on_marked_lines_are_ignored():
     assert result.suggestions == []
     assert any("auth.py:1" in w for w in result.warnings)
 
+def test_llm_warnings_reach_the_result():
+    pipeline = AnalysisPipeline()
+    note = "2 of 3 file(s) were not AI-reviewed, or only in part: an LLM request failed (timeout)"
+
+    def partial_review(pr, existing):
+        pipeline.llm.warnings = [note]
+        return []
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=make_pr()):
+        with patch.object(pipeline.llm, "analyze", side_effect=partial_review):
+            result = pipeline.run("https://github.com/neil/repo/pull/1")
+
+    assert note in result.warnings
+
+# ── test: the cache ───────────────────────────────────────────────────────────
+def test_github_and_llm_share_the_cache():
+    pipeline = AnalysisPipeline()
+    assert pipeline.cache.enabled
+    assert pipeline.github.cache is pipeline.cache and pipeline.llm.cache is pipeline.cache
+
+def test_no_cache_leaves_it_alone():
+    pipeline = AnalysisPipeline(use_cache=False)
+    assert not pipeline.github.cache.enabled and not pipeline.llm.cache.enabled
+
 def test_security_tool_warnings_reach_the_result():
     pipeline = AnalysisPipeline(skip_llm=True)
 
@@ -218,6 +243,36 @@ def test_low_findings_are_counted_not_commented():
     assert "- 2 × TODO" in body and "- 1 × Long line" in body
     assert "Findings not attached" not in body   # LOW findings are no longer listed one by one
 
+def test_low_finding_counts_name_their_rule():
+    # so a project can see which id to put in .pr-analyzer.toml's `disable`
+    pipeline = AnalysisPipeline(skip_llm=True, post_review=True)
+    patch_text = "@@ -0,0 +1,2 @@\n+wait(30)\n+wait(45)"
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=make_pr(patch_text)):
+        with patch.object(pipeline.github, "post_review") as mock_post:
+            pipeline.run("https://github.com/neil/repo/pull/1")
+
+    _, body, _ = mock_post.call_args[0]
+    assert "- 2 × Possible magic number (`magic-number`)" in body
+
+def test_review_body_neutralises_text_from_the_pr():
+    # titles can come from the LLM, which read the PR; they must not ping people, hide the rest
+    # of the review in an HTML comment, fake the bot's hidden tag or show links
+    pipeline = AnalysisPipeline(skip_llm=True, post_review=True)
+    off_diff = make_suggestion(50, "HIGH", title="Ping @maintainers <!-- pr-analyzer -->")
+    counted = make_suggestion(1, "LOW", title="[click here](https://evil.example)")
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=make_pr()):
+        with patch.object(pipeline.static, "analyze", return_value=[off_diff, counted]):
+            with patch.object(pipeline.security, "scan", return_value=[]):
+                with patch.object(pipeline.github, "post_review") as mock_post:
+                    pipeline.run("https://github.com/neil/repo/pull/1")
+
+    _, body, _ = mock_post.call_args[0]
+    assert "Ping @​maintainers" in body
+    for raw in ("@maintainers", "<!-- pr-analyzer -->", "](", "https://"):
+        assert raw not in body
+
 def test_post_review_failure_becomes_warning():
     pipeline = AnalysisPipeline(skip_llm=True, post_review=True)
 
@@ -243,3 +298,98 @@ def test_result_passed_follows_score(skip_llm):
         with patch.object(pipeline.llm, "analyze", return_value=[]):
             result = pipeline.run("https://github.com/neil/repo/pull/1", skip_llm=skip_llm)
     assert result.passed is result.score.passed is False
+
+# ── project settings (.pr-analyzer.toml) ──────────────────────────────────────
+URL = "https://github.com/neil/repo/pull/1"
+
+def run_with_config(toml, pr=None):
+    """Run with `toml` as the base branch's .pr-analyzer.toml; return the result and the fetch mock."""
+    pipeline = AnalysisPipeline(skip_llm=True)
+    with patch.object(pipeline.github, "fetch_pr", return_value=pr or make_pr()):
+        with patch.object(pipeline.github, "fetch_file", return_value=toml.encode()) as fetch:
+            result = pipeline.run(URL)
+    return result, fetch
+
+def test_config_comes_from_the_base_branch():
+    # never from the PR's own head, so a PR can't loosen its own checks
+    _, fetch = run_with_config("")
+    fetch.assert_called_once_with("neil/repo", ".pr-analyzer.toml", "main")
+
+def test_disabled_rules_are_not_reported():
+    result, _ = run_with_config('disable = ["hardcoded-password"]', make_insecure_pr())
+    assert result.suggestions == []
+    assert result.passed is True
+
+def test_thresholds_reach_the_checks():
+    pr = make_pr("@@ -1,1 +1,1 @@\n+total = compute_total()")
+    result, _ = run_with_config("[thresholds]\nmax_line_length = 10", pr)
+    assert [s.title for s in result.suggestions] == ["Line exceeds 10 characters"]
+
+def test_block_on_decides_what_blocks():
+    pr = make_pr("@@ -1,1 +1,1 @@\n+eval(data)")  # pr-analyzer: ignore
+    result, _ = run_with_config('block_on = ["CRITICAL"]', pr)
+    assert [s.severity for s in result.suggestions] == ["HIGH"]
+    assert result.passed is True
+
+def test_ignored_paths_are_not_analysed_or_sent_to_the_llm():
+    pr = make_insecure_pr()
+    pr.files.append(FileChange(filename="docs/example.py", status="added", additions=1, deletions=0,
+                               patch="@@ -0,0 +1,1 @@\n+print(token)", raw_content="print(token)"))
+    pipeline = AnalysisPipeline()
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=pr):
+        with patch.object(pipeline.github, "fetch_file", return_value=b'ignore_paths = ["docs/"]'):
+            with patch.object(pipeline.llm, "analyze", return_value=[]) as mock_llm:
+                result = pipeline.run(URL)
+
+    reviewed = mock_llm.call_args[0][0]
+    assert [f.filename for f in reviewed.files] == ["auth.py"]
+    assert [s.filename for s in result.suggestions] == ["auth.py"]
+    assert "Skipped 1 file(s) matching ignore_paths in .pr-analyzer.toml: docs/example.py" in result.warnings
+    assert len(result.pr.files) == 2      # the report still describes the whole PR
+
+def test_llm_can_be_disabled_by_config():
+    pipeline = AnalysisPipeline()
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=make_pr()):
+        with patch.object(pipeline.github, "fetch_file", return_value=b'disable = ["llm"]'):
+            with patch.object(pipeline.llm, "analyze") as mock_llm:
+                result = pipeline.run(URL)
+
+    mock_llm.assert_not_called()
+    assert result.llm_provider_used is None
+
+def test_inline_min_severity_moves_the_comment_threshold():
+    pipeline = AnalysisPipeline(skip_llm=True, post_review=True)
+    findings = [make_suggestion(1, "MEDIUM", title="Risky"), make_suggestion(1, "HIGH", title="Riskier")]
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=make_pr()):
+        with patch.object(pipeline.github, "fetch_file", return_value=b'inline_min_severity = "HIGH"'):
+            with patch.object(pipeline.static, "analyze", return_value=findings):
+                with patch.object(pipeline.security, "scan", return_value=[]):
+                    with patch.object(pipeline.github, "post_review") as mock_post:
+                        pipeline.run(URL)
+
+    _, body, comments = mock_post.call_args[0]
+    assert [s.title for s, _ in comments] == ["Riskier"]
+    assert "Findings below HIGH (1), counted but not commented inline" in body
+    assert "- 1 × Risky" in body
+
+def test_invalid_base_branch_config_stops_the_run():
+    pipeline = AnalysisPipeline(skip_llm=True)
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=make_pr()):
+        with patch.object(pipeline.github, "fetch_file", return_value=b'disable = ["magic-numbers"]'):
+            with pytest.raises(ConfigError, match=r"\.pr-analyzer\.toml on main is invalid"):
+                pipeline.run(URL)
+
+def test_explicit_config_replaces_the_base_branch_file():
+    pipeline = AnalysisPipeline(skip_llm=True)
+    pipeline.project_config = ProjectConfig(disable=frozenset({"hardcoded-password"}))
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=make_insecure_pr()):
+        with patch.object(pipeline.github, "fetch_file") as fetch:
+            result = pipeline.run(URL)
+
+    fetch.assert_not_called()
+    assert result.suggestions == []

@@ -37,6 +37,20 @@ def iter_added_lines(patch: str) -> Iterator[tuple[int, str]]:
             yield line_no, text
 
 
+def count_changes(patch: str) -> tuple[int, int]:
+    """(lines added, lines removed) by the patch."""
+    added = removed = 0
+    in_hunk = False
+    for raw in patch.splitlines():
+        if HUNK_HEADER.match(raw):
+            in_hunk = True
+        elif in_hunk and raw.startswith("+"):
+            added += 1
+        elif in_hunk and raw.startswith("-"):
+            removed += 1
+    return added, removed
+
+
 def commentable_lines(patch: str) -> set[int]:
     # GitHub accepts inline review comments only on lines that appear in the diff
     return {line_no for line_no, _, _ in iter_new_lines(patch)}
