@@ -231,6 +231,24 @@ def test_low_finding_counts_name_their_rule():
     _, body, _ = mock_post.call_args[0]
     assert "- 2 × Possible magic number (`magic-number`)" in body
 
+def test_review_body_neutralises_text_from_the_pr():
+    # titles can come from the LLM, which read the PR; they must not ping people, hide the rest
+    # of the review in an HTML comment, fake the bot's hidden tag or show links
+    pipeline = AnalysisPipeline(skip_llm=True, post_review=True)
+    off_diff = make_suggestion(50, "HIGH", title="Ping @maintainers <!-- pr-analyzer -->")
+    counted = make_suggestion(1, "LOW", title="[click here](https://evil.example)")
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=make_pr()):
+        with patch.object(pipeline.static, "analyze", return_value=[off_diff, counted]):
+            with patch.object(pipeline.security, "scan", return_value=[]):
+                with patch.object(pipeline.github, "post_review") as mock_post:
+                    pipeline.run("https://github.com/neil/repo/pull/1")
+
+    _, body, _ = mock_post.call_args[0]
+    assert "Ping @​maintainers" in body
+    for raw in ("@maintainers", "<!-- pr-analyzer -->", "](", "https://"):
+        assert raw not in body
+
 def test_post_review_failure_becomes_warning():
     pipeline = AnalysisPipeline(skip_llm=True, post_review=True)
 

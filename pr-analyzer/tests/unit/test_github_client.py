@@ -245,6 +245,18 @@ def test_post_review_falls_back_to_summary_when_comments_rejected(github):
     assert github.pr.create_review.call_count == 2
     assert "comments" not in github.pr.create_review.call_args.kwargs
 
+def test_comment_text_from_the_pr_is_neutralised(github):
+    # LLM titles and Semgrep messages can carry text a PR author planted
+    hostile = Suggestion(filename="app.py", severity="HIGH", category="security", line=3,
+                         title="Ask @admin\n## Approved",
+                         description="<!-- pr-analyzer --> see [docs](https://evil.example)")
+
+    GithubClient(token="t").post_review(make_pr_summary(), "body", [(hostile, 3)])
+
+    body = github.pr.create_review.call_args.kwargs["comments"][0]["body"]
+    assert body.startswith("**HIGH** — Ask @​admin ## Approved\n\n")
+    assert "<!--" not in body and "](" not in body and "https://" not in body
+
 def test_post_review_needs_token():
     with pytest.raises(InvalidTokenError):
         GithubClient(token="").post_review(make_pr_summary(), "body", [])

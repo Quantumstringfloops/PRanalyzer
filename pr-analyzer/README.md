@@ -132,6 +132,10 @@ subprocess.run(cmd, shell=True)  # pr-analyzer: ignore - cmd is a fixed string
 
 Every finding on that line is dropped and doesn't count towards the score, whichever check reported it: the regex rules, Semgrep, the dependency audit or the LLM. The report's warnings name each ignored line, so a reviewer can see what a PR silenced.
 
+### Text the bot posts
+
+Finding titles and descriptions can come from the LLM, which reads the PR, from Semgrep messages that quote the PR's code, and from file names the PR chose. Before posting a review the bot neutralises that text with an invisible zero-width space, so it reads the same but can't @mention anyone, add HTML (such as an `<!-- -->` comment that hides the rest of the review or fakes the bot's hidden tag), show links or images, or cross-reference issues; file names are shown as code.
+
 ### What the line rules skip
 
 The pattern rules read one added line at a time and tell code, string literals and comments apart in Python, JavaScript and TypeScript (and `//`, `/* */` and `"..."` in C-family languages such as Java, Go or Rust):

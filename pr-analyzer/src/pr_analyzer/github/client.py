@@ -19,6 +19,7 @@ from pr_analyzer.exceptions import (
     RateLimitError,
     RepositoryNotFoundError,
 )
+from pr_analyzer.github.markdown import neutralise, neutralise_line
 from pr_analyzer.models import FileChange, PRSummary, Suggestion
 
 log = structlog.get_logger(__name__)
@@ -181,12 +182,15 @@ class GithubClient:
         if not self.token:
             raise InvalidTokenError("--post-review needs a GITHUB_TOKEN that can write pull requests")
 
+        # titles and descriptions can come from the LLM or quote the PR's code: neutralise them so
+        # they can't ping people, hide text in HTML or show links (the path is an API field)
         review_comments: list[ReviewComment] = [
             {
                 "path": suggestion.filename,
                 "line": line,
                 "side": "RIGHT",
-                "body": f"**{suggestion.severity}** — {suggestion.title}\n\n{suggestion.description}",
+                "body": f"**{suggestion.severity}** — {neutralise_line(suggestion.title)}\n\n"
+                        f"{neutralise(suggestion.description)}",
             }
             for suggestion, line in comments
         ]
