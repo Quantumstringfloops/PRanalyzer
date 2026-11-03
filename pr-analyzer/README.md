@@ -132,6 +132,17 @@ subprocess.run(cmd, shell=True)  # pr-analyzer: ignore - cmd is a fixed string
 
 Every finding on that line is dropped and doesn't count towards the score, whichever check reported it: the regex rules, Semgrep, the dependency audit or the LLM. The report's warnings name each ignored line, so a reviewer can see what a PR silenced.
 
+### What the line rules skip
+
+The pattern rules read one added line at a time and tell code, string literals and comments apart in Python, JavaScript and TypeScript (and `//`, `/* */` and `"..."` in C-family languages such as Java, Go or Rust):
+
+- Rules about calls and settings (`eval(`, `pickle.load`, `yaml.load`, `subprocess … shell=True`, `debug=True`, `print(`, `console.log`) ignore text inside strings and comments. The SQL-injection rule still sees a string being formatted into a query.
+- `todo-comment` counts `TODO` and `FIXME` only in comments.
+- The secret rules read the whole line, strings and comments included, since that is where secrets end up.
+- `magic-number` skips numbers that are already named or explain themselves: a keyword argument or default value (`timeout=30`), an assignment (`retries = 5`), a dict key or object property (`"port": 8080`, `{ port: 8080 }`), a constant definition (`MAX_SIZE = 10`), a slice or index (`line[:72]`), a line about a version (`sys.version_info >= (3, 11)`), and well-known values: 10, 100 and 1000; 24, 60, 3600 and 86400; powers of two from 16 to 65536, 255 and 65535; ports 80 and 443; and the standard HTTP status codes. Test files are skipped.
+
+Because each line is read on its own, the middle lines of a multi-line string (a docstring, a template literal) or of a `/* */` comment are read as code unless they start like a comment (`*`, `#`, `//`); code inside f-string braces or `${...}` counts as part of the string; and JavaScript regex literals aren't recognised. Other languages are matched as before, anywhere in the line.
+
 ### Project configuration (`.pr-analyzer.toml`)
 
 A repository can tune the checks with a `.pr-analyzer.toml` file in its root. Every key is optional:
@@ -174,7 +185,7 @@ Configuration error: .pr-analyzer.toml on main is invalid:
 
 | Id | Flags | Severity | Applies to |
 |----|-------|----------|------------|
-| `todo-comment` | `TODO` / `FIXME` | LOW | source files |
+| `todo-comment` | `TODO` / `FIXME` in a comment | LOW | source files |
 | `console-log` | `console.log(` | LOW | JavaScript / TypeScript |
 | `print-call` | `print(` | LOW | Python |
 | `bare-except` | `except:` | MEDIUM | Python |
@@ -344,6 +355,8 @@ Only MEDIUM, HIGH and CRITICAL findings get inline comments (or the severities f
 - **Semgrep's default ruleset is downloaded** from the Semgrep registry, so it needs network access (point `SEMGREP_CONFIG` at a local file to avoid that).
 - **Fork PRs cannot post reviews** — GitHub blocks write tokens on PRs from forks by default.
 - **Ignore markers are the PR author's call** — anyone can add `pr-analyzer: ignore` to a line. The report names every ignored line, so check them during review.
+- **Line rules read one line at a time** — text in the middle of a multi-line docstring or comment can still trigger a code rule (see [What the line rules skip](#what-the-line-rules-skip)).
+- **Secret rules don't know test fixtures** — a placeholder password in a test (`password="pass"`) is reported like a real one; mark it with `pr-analyzer: ignore` or leave the fixtures out with `ignore_paths`.
 
 ---
 

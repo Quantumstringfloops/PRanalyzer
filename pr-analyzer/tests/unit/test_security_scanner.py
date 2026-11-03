@@ -157,6 +157,31 @@ def test_debug_mode_no_match():
     file = make_file(added("DEBUG = False"))
     assert scanner.scan([file]) == []
 
+@pytest.mark.parametrize("code", [
+    'msg = "never call eval(x) on input"',  # pr-analyzer: ignore
+    "x = load(f)  # not pickle.load(f)",  # pr-analyzer: ignore
+    "hint = 'use yaml.load(data, Loader=SafeLoader)'",  # pr-analyzer: ignore
+    'doc = "subprocess.run(cmd, shell=True) is unsafe"',  # pr-analyzer: ignore
+    'flag = "--debug=True"',
+])
+def test_calls_inside_strings_and_comments_are_not_flagged(code):
+    assert scanner.scan([make_file(added(code))]) == []
+
+def test_js_comment_after_code_is_not_flagged():
+    file = make_file(added("run(); // eval(x) was here"), filename="app.js")  # pr-analyzer: ignore
+    assert scanner.scan([file]) == []
+
+def test_a_call_after_a_string_is_still_flagged():
+    assert titles(make_file(added('x = "a"; eval(y)'))) == ["eval() usage detected"]  # pr-analyzer: ignore
+
+def test_secrets_are_still_found_in_comments():
+    file = make_file(added('x = 1  # password = "hunter22"'))  # pr-analyzer: ignore
+    assert titles(file) == ["Hardcoded password"]
+
+def test_sql_string_with_inner_quotes_is_still_flagged():
+    code = "cur.execute(\"SELECT * FROM t WHERE name = '%s'\" % name)"  # pr-analyzer: ignore
+    assert "Possible SQL injection" in titles(make_file(added(code)))
+
 def test_dangerous_patterns_only_in_source_files():
     docs = make_file(added("Never call eval(input) on user data."), filename="README.md")  # pr-analyzer: ignore
     assert scanner.scan([docs]) == []

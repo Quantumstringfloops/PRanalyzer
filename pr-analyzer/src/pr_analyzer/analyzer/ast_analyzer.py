@@ -4,6 +4,7 @@ from bisect import bisect_left
 from collections.abc import Collection, Iterator
 from dataclasses import dataclass
 from functools import lru_cache
+from http import HTTPStatus
 from typing import Any
 
 import structlog
@@ -12,6 +13,7 @@ import tree_sitter_python as tspython
 import tree_sitter_typescript as tstypescript
 from tree_sitter import Language, Node, Parser
 
+from pr_analyzer.analyzer.line_lexer import LineParts, split_line
 from pr_analyzer.diff import iter_added_lines
 from pr_analyzer.models import FileChange, Suggestion
 
@@ -37,10 +39,43 @@ CODE_EXTENSIONS = PYTHON | JS_TS | {
     ".java", ".go", ".rb", ".php", ".cs", ".rs", ".kt", ".swift",
     ".c", ".h", ".cc", ".cpp", ".hpp", ".scala", ".sh",
 }
-COMMENT_PREFIXES = ("#", "//", "/*", "*")
+
+# numbers whose meaning is plain wherever they appear
+WELL_KNOWN_NUMBERS = frozenset({
+    10, 100, 1000,                                  # powers of ten: percentages, scaling, ms
+    24, 60, 3600, 86400,                            # hours in a day; seconds in a minute/hour/day
+    16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 65536,   # bit widths and buffer sizes
+    255, 65535,                                     # the largest 8- and 16-bit values
+    80, 443,                                        # the HTTP and HTTPS ports
+}) | {int(status) for status in HTTPStatus}        # standard HTTP status codes, 100 to 511
+# `timeout=30`, `retries = 5`, `"port": 8080`, `{ port: 8080 }`: the name right before the number
+# says what it means. Comparisons (==, <=, ...) and augmented assignments (+=) don't name it.
+NAMED_BY = re.compile(r"(?:\b[A-Za-z_]\w*|[\"'\]])\s*(?::|(?<![=!<>+\-*/%&|^~:@])=)\s*[-+]?$")
+
+
+def in_subscript(code: str, pos: int) -> bool:
+    """Whether `pos` is inside [...] that follows a name, a call or a string: an index or a slice
+    such as `line[:72]` or `parts[-2]`, not a list literal."""
+    opening = code.rfind("[", 0, pos)
+    if opening < 1 or code.rfind("]", 0, pos) > opening:
+        return False
+    before = code[opening - 1]
+    return before.isalnum() or before in "_)]\"'"
+
+
+def explained_number(code: str, match: re.Match[str]) -> bool:
+    """A number a reader understands without a named constant."""
+    return (
+        int(match.group()) in WELL_KNOWN_NUMBERS
+        or NAMED_BY.search(code, 0, match.start()) is not None
+        or in_subscript(code, match.start())
+    )
+
 
 # Each rule runs on one added line at a time (the text after the leading "+"). Its "id" is the
-# stable name .pr-analyzer.toml uses to switch it off.
+# stable name .pr-analyzer.toml uses to switch it off. Its "scope" picks the view of the line it
+# reads (see line_lexer): "code" leaves out comments and the contents of strings, "comments" is
+# the comments alone. An optional "exempt" callable can wave off individual matches.
 # Hardcoded secrets are not checked here: the security scanner owns them, and checking them in
 # both places used to penalise the same line twice.
 PATTERNS: list[dict[str, Any]] = [
@@ -48,7 +83,8 @@ PATTERNS: list[dict[str, Any]] = [
         "id": "todo-comment",
         "regex": re.compile(r"\b(TODO|FIXME)\b"),
         "extensions": CODE_EXTENSIONS,
-        "skip_comments": False,
+        # in a string the marker is data, such as a status value, not a note to the team
+        "scope": "comments",
         "severity": "LOW",
         "category": "style",
         "title": "TODO/FIXME comment added",
@@ -60,7 +96,7 @@ PATTERNS: list[dict[str, Any]] = [
         "id": "console-log",
         "regex": re.compile(r"\bconsole\.log\s*\("),
         "extensions": JS_TS,
-        "skip_comments": True,
+        "scope": "code",
         "severity": "LOW",
         "category": "style",
         "title": "console.log left in code",
@@ -72,7 +108,7 @@ PATTERNS: list[dict[str, Any]] = [
         "id": "print-call",
         "regex": re.compile(r"(?<![\w.])print\s*\("),
         "extensions": PYTHON,
-        "skip_comments": True,
+        "scope": "code",
         "severity": "LOW",
         "category": "style",
         "title": "print() left in code",
@@ -84,7 +120,7 @@ PATTERNS: list[dict[str, Any]] = [
         "id": "bare-except",
         "regex": re.compile(r"^\s*except\s*:"),
         "extensions": PYTHON,
-        "skip_comments": True,
+        "scope": "code",
         "severity": "MEDIUM",
         "category": "security",
         "title": "Bare except clause",
@@ -95,12 +131,15 @@ PATTERNS: list[dict[str, Any]] = [
     },
     {
         "id": "magic-number",
-        "regex": re.compile(r"[^\w.](?<!0x)\b(?!0\b|1\b)\d{2,}\b"),
+        # an integer of two or more digits, not part of a name or a decimal fraction
+        "regex": re.compile(r"(?<=[^\w.])\d{2,}\b"),
         "extensions": CODE_EXTENSIONS,
-        "skip_comments": True,
+        "scope": "code",
         "skip_tests": True,
-        # defining a named constant is the fix this rule asks for, so don't flag it
-        "skip_if": re.compile(r"^\s*[A-Z][A-Z0-9_]*\s*(:[^=]*)?="),
+        # defining a named constant (_PRIVATE ones too) is the fix this rule asks for, and a
+        # version check such as `sys.version_info >= (3, 11)` names its own numbers
+        "skip_if": re.compile(r"^\s*_*[A-Z][A-Z0-9_]*\s*(:[^=]*)?=|(?i:(?:\b|_)version)"),
+        "exempt": explained_number,
         "severity": "LOW",
         "category": "style",
         "title": "Possible magic number",
@@ -112,7 +151,7 @@ PATTERNS: list[dict[str, Any]] = [
         "id": "missing-return-type",
         "regex": re.compile(r"^\s*(async\s+)?def\s+\w+\s*\([^)]*\)\s*:"),
         "extensions": PYTHON,
-        "skip_comments": True,
+        "scope": "code",
         # test functions rarely annotate a return type; flagging each one buried real findings
         "skip_tests": True,
         "severity": "LOW",
@@ -172,10 +211,6 @@ class Thresholds:
 
 def file_extension(filename: str) -> str:
     return os.path.splitext(filename)[1].lower()
-
-
-def is_comment(text: str) -> bool:
-    return text.lstrip().startswith(COMMENT_PREFIXES)
 
 
 def is_test_file(filename: str) -> bool:
@@ -262,13 +297,13 @@ def patterns_for(filename: str, disabled: Collection[str] = ()) -> list[dict[str
     ]
 
 
-def line_matches(pattern: dict[str, Any], text: str, comment: bool) -> bool:
-    if comment and pattern["skip_comments"]:
-        return False
+def line_matches(pattern: dict[str, Any], parts: LineParts) -> bool:
+    text = parts.comments if pattern["scope"] == "comments" else parts.code
     skip_if = pattern.get("skip_if")
     if skip_if is not None and skip_if.search(text):
         return False
-    return pattern["regex"].search(text) is not None
+    exempt = pattern.get("exempt")
+    return any(exempt is None or not exempt(text, m) for m in pattern["regex"].finditer(text))
 
 
 def pattern_finding(file: FileChange, pattern: dict[str, Any], line_no: int) -> Suggestion:
@@ -322,15 +357,15 @@ class StaticAnalyzer:
     ) -> list[Suggestion]:
         if file.patch is None:
             return []
+        extension = file_extension(file.filename)
         patterns = patterns_for(file.filename, disabled)
-        check_length = (LONG_LINE_RULE not in disabled
-                        and file_extension(file.filename) in CODE_EXTENSIONS)
+        check_length = LONG_LINE_RULE not in disabled and extension in CODE_EXTENSIONS
 
         suggestions: list[Suggestion] = []
         for line_no, text in iter_added_lines(file.patch):
-            comment = is_comment(text)
+            parts = split_line(text, extension)
             suggestions.extend(
-                pattern_finding(file, p, line_no) for p in patterns if line_matches(p, text, comment)
+                pattern_finding(file, p, line_no) for p in patterns if line_matches(p, parts)
             )
             if check_length and len(text) > max_line_length:
                 suggestions.append(long_line_finding(file, line_no, max_line_length))

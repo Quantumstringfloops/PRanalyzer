@@ -5,7 +5,8 @@ from typing import Any
 
 import structlog
 
-from pr_analyzer.analyzer.ast_analyzer import CODE_EXTENSIONS, file_extension, is_comment
+from pr_analyzer.analyzer.ast_analyzer import CODE_EXTENSIONS, file_extension
+from pr_analyzer.analyzer.line_lexer import split_line
 from pr_analyzer.diff import iter_added_lines
 from pr_analyzer.models import FileChange, Suggestion
 from pr_analyzer.security.dep_auditor import DEPENDENCY_AUDIT_RULE, DepAuditScanner
@@ -80,7 +81,9 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
     },
 ]
 
-# Checked only in source files, and never on comment lines.
+# Checked only in source files, and only on code: a call named in a comment or written inside a
+# string literal isn't a call. String quotes stay visible (see line_lexer), so the SQL rule still
+# sees a string being formatted into a query.
 DANGEROUS_PATTERNS: list[dict[str, Any]] = [
     {
         "id": "sql-injection",
@@ -241,15 +244,15 @@ class SecurityScanner:
     def scan_dangerous(
         self, file: FileChange, patterns: list[dict[str, Any]] = DANGEROUS_PATTERNS
     ) -> list[Suggestion]:
-        if file.patch is None or file_extension(file.filename) not in CODE_EXTENSIONS:
+        extension = file_extension(file.filename)
+        if file.patch is None or extension not in CODE_EXTENSIONS:
             return []
 
         suggestions = []
         for line_no, text in iter_added_lines(file.patch):
-            if is_comment(text):
-                continue
+            code = split_line(text, extension).code
             for pattern in patterns:
-                if pattern["regex"].search(text):
+                if pattern["regex"].search(code):
                     suggestions.append(self._suggestion(file, pattern, line_no))
 
         return suggestions
