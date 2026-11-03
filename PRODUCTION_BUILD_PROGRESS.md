@@ -72,13 +72,15 @@ Permission to rewrite modules and the added scalability requirements don't chang
   - **Verified on PR #3**, and all checks passed both times:
     - The run on `57eef90` added one tagged summary review, as expected, since the first review predates the tag. It repeated none of the 7 inline comments.
     - The run on `5a8c06d` added no review. It only edited the tagged one: its footer's run time went from 23.11s to 28.22s.
+- 2026-11-03: **Workflow actions pinned by commit** (`d7d5f9e`), at the user's request:
+  - `actions/checkout` v7.0.1 and `actions/setup-python` v7.1.0. Both run on Node 24, and nothing in their release notes affects these workflows.
+  - With real Semgrep, the local bot preview now predicts 79.0 (C+), passed, with 3 inline comments. The 4 Semgrep notes about movable tags are gone.
 
 ## Work Remaining
 
 - **Production build:** none. The gate stopped it.
 - **Free-CLI track:**
   - get PR #3 reviewed and merged (see Next Step);
-  - pin the workflows' actions to commits, on versions that don't use the deprecated Node 20;
   - publish to PyPI or as a GitHub Action;
   - optionally purge the leaked `.env` from git history (a force-push to a public repo; only after the keys are rotated, and only with explicit approval).
 - **User actions:**
@@ -89,6 +91,6 @@ Permission to rewrite modules and the added scalability requirements don't chang
 
 **Do not start or resume a production build from this file.** The gate failed.
 
-PR #3 (https://github.com/Quantumstringfloops/PRanalyzer/pull/3) is open from `fix/working-cli`. All of its checks pass, and the bot's behaviour on repeat runs is verified. Merging it is the user's call. The remaining follow-ups are under Work Remaining.
+PR #3 (https://github.com/Quantumstringfloops/PRanalyzer/pull/3) is open from `fix/working-cli`, and the bot's behaviour on repeat runs is verified. Check that CI and the bot pass with the pinned actions from `d7d5f9e`. After that, merging is the user's call. The remaining follow-ups are under Work Remaining.
 
 If the user changes the preconditions above and explicitly asks, re-run the gate.
