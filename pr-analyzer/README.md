@@ -332,7 +332,9 @@ No checkout step is needed: the action reads the PR through the GitHub API and i
 - On `pull_request`, PRs from forks get a read-only token and no secrets, so the review can't be posted; skip them with `if: github.event.pull_request.head.repo.full_name == github.repository` on the job, as this repository's own workflow does.
 - With `llm-provider: ollama`, set `OLLAMA_URL` in the step's `env:`.
 - `config` reads a file from the workspace. If the job checks out the PR, that is the PR's own code, which could loosen its own checks, so prefer the base branch's `.pr-analyzer.toml` unless the file comes from somewhere the PR can't change.
-- pr-analyzer is installed and run outside the workspace, with Python isolated (`-I`), so files in a checked-out PR can't stand in for pip or any other module, a `.env` file in the PR can't change its settings, and the log can't be fed workflow commands by text from the PR.
+- pr-analyzer is installed and run from folders outside the workspace, and the action's own `python` commands run isolated (`-I`), so they never look for modules in the current directory. A `pip.py` or other module in a checked-out PR can't stand in for the real one that way, and a `.env` file in the PR can't change pr-analyzer's settings.
+- Before installing pr-analyzer, and again before running it, the action removes every environment variable from the job whose name starts with `PYTHON`, such as `PYTHONPATH` or `PYTHONHOME`, so none of them reaches any process it starts from then on, pip and the processes pip starts, pr-analyzer, Semgrep and pip-audit among them. A `PYTHONPATH` that points at a checked-out PR can't make them load its files. Other variables that the action doesn't set itself, such as `PATH` or pip's `PIP_*` settings, reach those processes as the job sets them, so don't point them at the PR's files.
+- The log can't be fed workflow commands by text from the PR.
 
 ---
 
