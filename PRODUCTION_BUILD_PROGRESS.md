@@ -65,13 +65,17 @@ Permission to rewrite modules and the added scalability requirements don't chang
   - **All checks passed:** CI on Python 3.11 and 3.12, and the PR Analysis bot.
   - The bot's review matched the local preview exactly: 67.8, D, passed, with 7 inline comments. That was also the first real run of `--post-review` against GitHub. The LLM step was skipped because the repo has no `OPENAI_API_KEY` secret.
   - The app can't bind the PR. `gh` 2.103.3 is installed, but the user skipped signing in. `origin` still uses the old repo name `PRlearn`; changing it was blocked by the permission check.
+- 2026-11-03: **Re-runs update the bot's review instead of adding one** (`57eef90`):
+  - The summary review now carries a hidden tag, and later runs edit it in place.
+  - Inline comments are posted only for findings not already commented on the PR. Comments GitHub has marked outdated don't count.
+  - Tests: 217 pass, including 6 new ones for repeat runs; ruff and mypy are clean.
+  - Pushed to PR #3, where the bot ran it straight away. Expected result: one new tagged summary review, because the earlier review predates the tag, and no repeated inline comments. Any run after that should only edit the tagged review.
 
 ## Work Remaining
 
 - **Production build:** none. The gate stopped it.
 - **Free-CLI track:**
   - get PR #3 reviewed and merged (see Next Step);
-  - stop the PR bot posting a whole new review on every push; it should update its earlier one;
   - pin the workflows' actions to commits, on versions that don't use the deprecated Node 20;
   - publish to PyPI or as a GitHub Action;
   - optionally purge the leaked `.env` from git history (a force-push to a public repo; only after the keys are rotated, and only with explicit approval).
@@ -83,8 +87,10 @@ Permission to rewrite modules and the added scalability requirements don't chang
 
 **Do not start or resume a production build from this file.** The gate failed.
 
-PR #3 (https://github.com/Quantumstringfloops/PRanalyzer/pull/3) is open from `fix/working-cli`, and all of its checks passed. Merging it is the user's call.
+PR #3 (https://github.com/Quantumstringfloops/PRanalyzer/pull/3) is open from `fix/working-cli`. Merging it is the user's call.
 
-This entry is committed locally but not pushed. Every push to the PR makes the bot post a whole new review, so push it together with the next real change.
+Once the bot's run on `57eef90` finishes, check that it added one tagged summary review and repeated no inline comments.
+
+This entry is committed locally but not pushed, because a push while the bot is running cancels that run. Push it next: the bot's run on that push should only edit the tagged review, which tests the fix on a real PR.
 
 If the user changes the preconditions above and explicitly asks, re-run the gate.
