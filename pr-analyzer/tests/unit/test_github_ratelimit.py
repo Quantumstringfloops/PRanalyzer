@@ -7,14 +7,17 @@ import sys
 import threading
 import types
 from email.utils import formatdate
+from pathlib import Path
 
 import github
 import pytest
 from github import GithubException, RateLimitExceededException
 from structlog.testing import capture_logs
+from typer.testing import CliRunner
 from urllib3.connectionpool import HTTPConnectionPool
 from urllib3.response import HTTPResponse
 
+from pr_analyzer import cli
 from pr_analyzer.config import settings
 from pr_analyzer.exceptions import RateLimitError
 from pr_analyzer.github import client as client_module
@@ -29,6 +32,7 @@ from pr_analyzer.github.ratelimit import (
 NOW = 1_800_000_000.0
 API = "http://api.github.test"
 URL = "https://github.com/o/r/pull/1"
+README = Path(__file__).resolve().parents[2] / "README.md"
 SECONDARY = {"message": "You have exceeded a secondary rate limit. Please wait a few minutes "
                         "before you try again."}
 PRIMARY = {"message": "API rate limit exceeded for 203.0.113.7."}
@@ -472,3 +476,29 @@ def test_client_carries_on_after_a_failed_fetch(api, clock):
     pr = client.fetch_pr(URL)
 
     assert [f.raw_content for f in pr.files] == ["x = 1\n", "x = 1\n"]
+
+# ── a limit while posting the review ──────────────────────────────────────────
+def test_limit_while_posting_is_a_warning_as_the_readme_says(api, monkeypatch):
+    # only a limit while the PR is fetched fails the run (exit code 2); when posting the review
+    # is limited, the report still stands and the exit code follows the verdict
+    monkeypatch.setattr(settings, "github_token", "test-token")
+    monkeypatch.setattr(settings, "github_rate_limit_max_wait_seconds", 60)
+    api.add("/repos/o/r/contents/.pr-analyzer.toml", (404, {}, {"message": "Not Found"}))
+    api.add("/repos/o/r/commits/abc", (200, {}, {"sha": "abc", "url": f"{API}/repos/o/r/commits/abc"}))
+    api.add("/repos/o/r/pulls/1/comments", (200, {}, []))
+    api.add("/repos/o/r/pulls/1/reviews", (200, {}, []))
+    api.add("/repos/o/r/pulls/1/reviews", (429, {"Retry-After": "120"}, SLOW_DOWN), method="POST")
+
+    result = CliRunner().invoke(cli.app, ["analyze", URL, "--skip-llm", "--post-review",
+                                          "--no-cache", "-o", "json"])
+
+    assert result.exit_code == 0
+    assert any(w.startswith("Could not post the GitHub review: Rate limit exceeded")
+               for w in json.loads(result.stdout)["warnings"])
+    assert api.requests.count(("POST", "/repos/o/r/pulls/1/reviews")) == 1
+    readme = README.read_text(encoding="utf-8")
+    setting = next(line for line in readme.splitlines()
+                   if line.startswith("| `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS`"))
+    section = next(part for part in readme.split("\n\n") if part.startswith("**Rate limits.**"))
+    for text in (setting, section):
+        assert "exit code 2" in text and "review is posted" in text and "warning" in text

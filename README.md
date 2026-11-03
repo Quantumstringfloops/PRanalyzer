@@ -330,7 +330,7 @@ Settings come from environment variables or a `.env` file in the directory you r
 | `PIP_AUDIT_TIMEOUT_SECONDS` | ❌ | `300` | Time limit for pip-audit |
 | `GITHUB_TIMEOUT_SECONDS` | ❌ | `30` | Time limit for each GitHub API request |
 | `GITHUB_MAX_WORKERS` | ❌ | `8` | Files whose content is fetched at the same time |
-| `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS` | ❌ | `60` | Longest wait for a GitHub rate limit to reset; a longer one fails the run (exit code 2). `0` = never wait |
+| `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS` | ❌ | `60` | Longest wait for a GitHub rate limit to reset. A longer one fails the run while the PR is fetched (exit code 2); when the review is posted, it leaves the review out with a warning. `0` = never wait |
 | `CACHE_ENABLED` | ❌ | `true` | `false` turns the [on-disk cache](#caching) off |
 | `CACHE_DIR` | ❌ | `$XDG_CACHE_HOME/pr-analyzer`, else `~/.cache/pr-analyzer` | Where the cache lives |
 | `CACHE_MAX_SIZE_MB` | ❌ | `500` | Beyond this, the least recently used entries are removed |
@@ -343,7 +343,7 @@ Settings come from environment variables or a `.env` file in the directory you r
 
 **Fetching.** The full content of `GITHUB_MAX_WORKERS` files is fetched at a time, each worker thread with a GitHub client of its own. With 100 ms per request, a 50-file PR took 19.2 s before and takes 3.1 s now (`benchmarks/fetch_benchmark.py`).
 
-**Rate limits.** When GitHub answers with a rate limit (403 or 429), the request is sent again once the limit allows: after `Retry-After` seconds, at `X-RateLimit-Reset` for the hourly limit, or after a minute when GitHub doesn't say. Waits are logged, and the other requests hold back meanwhile. A wait longer than `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS` isn't sat out: the run stops with exit code 2 and says when to try again.
+**Rate limits.** When GitHub answers with a rate limit (403 or 429), the request is sent again once the limit allows: after `Retry-After` (seconds, or a date), at `X-RateLimit-Reset` for the hourly limit, or after a minute when GitHub doesn't say. Each wait is logged as a warning, and the other requests hold back meanwhile; Ctrl-C ends the waits at once. A wait longer than `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS` isn't sat out. While the PR is fetched, the run then stops with exit code 2 and says when to try again. When the review is posted (`--post-review`, the last step), the report still stands: the review is left out, a warning says when to try again, and the exit code follows the verdict.
 
 **LLM review in parts.** A diff of up to `MAX_DIFF_LINES` lines is reviewed in one request, as before. A bigger one is split into parts of whole files (a file too big for one part is cut between hunks, or between lines, keeping its line numbers), each reviewed in its own request, and the suggestions are merged. `LLM_TOKEN_BUDGET` caps what one run sends: once the next part would go over it, the remaining parts are skipped and a warning says how many files weren't AI-reviewed. If a request fails, the parts already reviewed are kept and the warning says what was left out. Parts are sent one at a time by default, because Ollama may queue parallel requests (see its `OLLAMA_NUM_PARALLEL`) and time spent in its queue counts towards `LLM_TIMEOUT_SECONDS`; for OpenAI and Anthropic, `LLM_MAX_CONCURRENCY=2` to `4` reviews a big PR faster.
 
