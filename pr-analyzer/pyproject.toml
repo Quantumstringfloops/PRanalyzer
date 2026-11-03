@@ -1,6 +1,8 @@
 [project]
-# published as "pranalyzer"; the command stays `pr-analyzer` and the import package `pr_analyzer`
-name = "pranalyzer"
+# Published as "pr-analyzer-cli": "pr-analyzer" on PyPI is another project, and PyPI refuses any
+# name that only differs from it in case, punctuation or l/i/o lookalikes (so "pranalyzer" too).
+# The command stays `pr-analyzer` and the import package `pr_analyzer`.
+name = "pr-analyzer-cli"
 version = "0.1.0"
 description = "Score GitHub pull requests with static analysis, security scanning and an optional LLM review"
 authors = [{ name = "Neil Mathew" }]

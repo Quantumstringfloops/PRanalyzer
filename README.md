@@ -66,27 +66,69 @@ Every check reports only lines the PR adds, so a PR is never blamed for code it 
 
 ---
 
-## Install
+## Getting Started
 
-Python 3.11 or newer. The package is called `pranalyzer` on PyPI; the command it installs is `pr-analyzer`.
+You need Python 3.11 or newer. The package is called `pr-analyzer-cli` (`pr-analyzer` on PyPI is an unrelated project), and the command it installs is `pr-analyzer`.
+
+### 1. Install
 
 ```bash
-pip install pranalyzer                  # static checks, secret scanning, LLM review through Ollama
-pip install "pranalyzer[security]"      # adds Semgrep and pip-audit
-pip install "pranalyzer[openai]"        # adds the OpenAI SDK, for LLM_PROVIDER=openai
-pip install "pranalyzer[anthropic]"     # adds the Anthropic SDK, for LLM_PROVIDER=anthropic
+pip install "pr-analyzer-cli[security]"
 ```
 
-Extras combine: `pip install "pranalyzer[security,openai]"`. `pipx install pranalyzer` works too.
-
-## Quickstart
+Or straight from GitHub, for the latest `main`:
 
 ```bash
-export GITHUB_TOKEN=ghp_...      # optional for public repos; needed for private ones and --post-review
+pip install "pr-analyzer-cli[security] @ git+https://github.com/Quantumstringfloops/PRanalyzer.git#subdirectory=pr-analyzer"
+```
+
+> Until the first release is on PyPI, use the GitHub line.
+
+`[security]` adds Semgrep and pip-audit. Leave it out for a smaller install, or add `openai` or `anthropic` for those LLM providers, for example `[security,openai]`. `pipx install` works too.
+
+### 2. Analyse a pull request
+
+```bash
+pr-analyzer analyze https://github.com/pallets/flask/pull/6176 --skip-llm
+```
+
+This runs the static and security checks, then prints a score, a grade and every finding.
+
+Public repositories work without a token, though GitHub allows only 60 requests an hour without one. For private repositories, for posting reviews, or for big PRs, set a token first:
+
+```bash
+export GITHUB_TOKEN=ghp_...   # classic: the repo scope; fine-grained: read access to Contents and Pull requests
+```
+
+### 3. Add the AI review (optional)
+
+Pick a provider and drop `--skip-llm`:
+
+```bash
+# a local model through Ollama (the default provider; the Ollama app or `ollama serve` must be running)
+ollama pull llama3.2
+pr-analyzer analyze https://github.com/owner/repo/pull/123
+
+# OpenAI
+pip install "pr-analyzer-cli[security,openai]"
+export LLM_PROVIDER=openai OPENAI_API_KEY=sk-...
+pr-analyzer analyze https://github.com/owner/repo/pull/123
+
+# Anthropic
+pip install "pr-analyzer-cli[security,anthropic]"
+export LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-...
 pr-analyzer analyze https://github.com/owner/repo/pull/123
 ```
 
-The default LLM is a local Ollama model (`ollama pull llama3.2`). If Ollama isn't running, the review still completes without LLM suggestions and says so; use `--skip-llm` to skip it on purpose, or set `LLM_PROVIDER` to `openai` or `anthropic` (install the matching extra).
+If the provider can't be reached, the run still finishes without LLM suggestions and says so.
+
+### 4. Use it in CI, or on every pull request
+
+- `--output json` and `--output markdown` print a report other tools can read. The exit code is `0` when the PR passed, `1` when it's blocked, and `2` when it couldn't be analysed.
+- `--post-review` posts the result on the PR as a review with inline comments.
+- To review every pull request automatically, add the GitHub Action; see [Use it in GitHub Actions](#use-it-in-github-actions).
+
+Settings can also come from environment variables, or from a `.env` file in the directory you run it from. `.env.example` lists them all.
 
 ### From source (contributors)
 
@@ -95,8 +137,7 @@ git clone https://github.com/Quantumstringfloops/PRanalyzer.git
 cd PRanalyzer/pr-analyzer
 pip install "poetry>=2.2"
 poetry install --all-extras
-cp .env.example .env            # then fill in GITHUB_TOKEN and the LLM settings
-poetry run pr-analyzer analyze https://github.com/owner/repo/pull/123
+poetry run pr-analyzer analyze https://github.com/owner/repo/pull/123 --skip-llm
 poetry run pytest
 ```
 
@@ -135,20 +176,20 @@ Every finding on that line is dropped and doesn't count towards the score, which
 
 ### Text the bot posts
 
-Finding titles and descriptions can come from the LLM, which reads the PR, from Semgrep messages that quote the PR's code, and from file names the PR chose. Before posting a review the bot neutralises that text with an invisible zero-width space, so it reads the same but can't @mention anyone, add HTML (such as an `<!-- -->` comment that hides the rest of the review or fakes the bot's hidden tag), show links or images, or cross-reference issues; file names are shown as code.
+Finding titles and descriptions can come from the LLM, which reads the PR, from Semgrep messages that quote the PR's code, and from file names the PR chose. Before posting a review the bot neutralises that text with an invisible zero-width space, so it reads the same but can't @mention anyone, add HTML (such as an `<!-- -->` comment that hides the rest of the review or fakes the bot's hidden tag), show links or images, or cross-reference issues (`#123`, `GH-123`), not even through character references such as `&#x40;` or `&commat;`, which are shown as written. Inline code and fenced code blocks are left as written, since GitHub acts on nothing inside them, so a suggested change can be committed and code copied without picking up invisible characters (inline code only keeps a break between `]` and `:`, where GitHub could still read a link definition). Whatever GitHub might not show as code is still neutralised: blocks it draws instead, such as maths and Mermaid diagrams, code that a `$` could turn into maths, and code whose place it can't be sure of, such as a fenced block indented into a list. A `<` or `]` that can't start a tag or a link is left alone too, which keeps the bot's own hints, such as `pip install 'pranalyzer[security]'`, working when copied. In the list of findings, file names are shown as code; in the notes they are neutralised like the rest.
 
-The LLM prompt treats the PR the same way: its title, file names and diff sit between `<untrusted_pr_content>` tags that the model is told hold code to review and never instructions, any copy of the tags inside the PR is escaped, and the scanner findings the model must not repeat sit in a block of their own. Prompt injection can't be ruled out entirely, so the LLM's reply is still checked strictly: only JSON suggestions about files in the PR, with known severities and categories, are kept.
+The LLM prompt treats the PR the same way: its title, file names and diff sit between `<untrusted_pr_content>` tags that the model is told hold code to review and never instructions, and any copy of the tags inside the PR is escaped. The scanner findings the model must not repeat sit in a block of their own, one JSON object per finding, so a file name stays a quoted value that can't pose as another finding, and the model is told those names were chosen by the PR. Prompt injection can't be ruled out entirely, so the LLM's reply is still checked strictly: only JSON suggestions about files in the PR, with known severities and categories, are kept.
 
 ### What the line rules skip
 
-The pattern rules read one added line at a time and tell code, string literals and comments apart in Python, JavaScript and TypeScript (and `//`, `/* */` and `"..."` in C-family languages such as Java, Go or Rust):
+The pattern rules read one added line at a time and tell code, string literals and comments apart in Python, JavaScript and TypeScript, and in C-family languages such as Java, Go or Rust (`//`, `/* */`, `"..."` and character literals such as `'"'`). In Python a line holding only a docstring is read like a comment, and in C, C++ and C# so is a line starting with `#`, a preprocessor directive such as `#define`, `#pragma` or `#region`. PHP and other languages are matched as before, anywhere in the line, and a line starting with `#`, `//`, `/*` or `*` counts as a comment:
 
-- Rules about calls and settings (`eval(`, `pickle.load`, `yaml.load`, `subprocess … shell=True`, `debug=True`, `print(`, `console.log`) ignore text inside strings and comments. The SQL-injection rule still sees a string being formatted into a query.
-- `todo-comment` counts `TODO` and `FIXME` only in comments.
+- Rules about calls and settings (`eval(`, `pickle.load`, `yaml.load`, `subprocess … shell=True`, `debug=True`, `print(`, `console.log`) ignore text inside strings and comments. The code in an f-string's `{...}` or a template literal's `${...}` is checked like any other code, though a format spec such as `:>8` is text. The SQL-injection rule still sees a string being formatted into a query.
+- `todo-comment` counts `TODO` and `FIXME` anywhere but inside a string literal: in comments and docstrings, and on the middle lines of a docstring or a `/* */` comment, but not in `status = "TODO"`.
 - The secret rules read the whole line, strings and comments included, since that is where secrets end up.
 - `magic-number` skips numbers that are already named or explain themselves: a keyword argument or default value (`timeout=30`), an assignment (`retries = 5`), a dict key or object property (`"port": 8080`, `{ port: 8080 }`), a constant definition (`MAX_SIZE = 10`), a slice or index (`line[:72]`), a line about a version (`sys.version_info >= (3, 11)`), and well-known values: 10, 100 and 1000; 24, 60, 3600 and 86400; powers of two from 16 to 65536, 255 and 65535; ports 80 and 443; and the standard HTTP status codes. Test files are skipped.
 
-Because each line is read on its own, the middle lines of a multi-line string (a docstring, a template literal) or of a `/* */` comment are read as code unless they start like a comment (`*`, `#`, `//`); code inside f-string braces or `${...}` counts as part of the string; and JavaScript regex literals aren't recognised. Other languages are matched as before, anywhere in the line.
+Because each line is read on its own, the middle lines of a multi-line string (a docstring, a template literal) or of a `/* */` comment are read as code unless they start like a comment (`*`, `#`, `//`), and JavaScript regex literals aren't recognised.
 
 ### Project configuration (`.pr-analyzer.toml`)
 
@@ -176,23 +217,41 @@ max_line_length = 120    # longer added lines get a long-line finding
 
 The values shown are the defaults. Severities can be written in any case.
 
-**Where it is read from.** When a PR is analysed, `.pr-analyzer.toml` is read from the PR's **base branch** through the GitHub API, never from the PR itself, so a PR can't loosen its own checks; a change to the file takes effect once it is merged. A file in the current directory is never picked up (in CI that is the PR's own checkout). `--config PATH` uses a local file instead. No file means the defaults.
+**Where it is read from.** When a PR is analysed, `.pr-analyzer.toml` is read from the PR's **base branch** through the GitHub API, never from the PR itself, so a PR can't loosen its own checks; a change to the file takes effect once it is merged, and until then the PR's copy is only checked (see below). A file in the current directory is never picked up (in CI that is the PR's own checkout). `--config PATH` uses a local file instead. No file means the defaults.
 
-**Validation.** Unknown keys, unknown rule ids, bad severities and thresholds that aren't positive whole numbers are errors: the run stops with exit code 2 and a message listing every problem, with a suggestion for likely typos:
+**Validation.** Unknown keys, unknown rule ids, bad severities, unsupported `ignore_paths` patterns and thresholds that aren't positive whole numbers make the file invalid. Every problem is named, with a suggestion for likely typos, and what happens next depends on where the file came from:
 
-```
-Configuration error: .pr-analyzer.toml on main is invalid:
-  - unknown key 'disabel' (did you mean 'disable'?)
-  - disable: unknown rule id 'magic-numbers' (did you mean 'magic-number'?)
-```
+- **A PR that adds or changes `.pr-analyzer.toml`** has its copy checked, though not applied: each problem is a HIGH finding on the file, with the rule id `config`, so with the default `block_on` the PR is blocked until the file is valid. The check runs whatever `ignore_paths` says; `disable = ["config"]` on the base branch turns it off.
+- **An invalid file on the base branch** doesn't stop the run. The file is ignored, the PR is analysed with the default settings, and a warning names the problems in the report, in the review's notes and on stderr:
 
-**`ignore_paths` patterns** work like `.gitignore`: `*` and `?` match within one directory and `**` across directories; a pattern with no `/` (like `*.min.js`) matches in every directory, one with a leading or inner `/` (like `docs/**` or `/setup.py`) only from the repository root, a trailing `/` matches a directory, and a pattern that matches a directory covers every file in it. The report notes which files were skipped.
+  ```
+  .pr-analyzer.toml on main is invalid, so the default settings were used: disable: unknown rule id 'magic-numbers' (did you mean 'magic-number'?)
+  ```
+
+  To recover, fix the file in a PR to that branch. That PR is analysed with the defaults like any other, and its copy of the file is checked; once it is merged, the project's settings apply again.
+- **An invalid `--config` file** stops the run with exit code 2 before anything is fetched:
+
+  ```
+  Configuration error: settings.toml is invalid:
+    - unknown key 'disabel' (did you mean 'disable'?)
+    - disable: unknown rule id 'magic-numbers' (did you mean 'magic-number'?)
+  ```
+
+**`ignore_paths` patterns** use a subset of `.gitignore` syntax, matched the way git matches it:
+
+- `*` matches any run of characters within one path segment, and `?` any one character except `/`.
+- `**` as a whole path segment crosses directories: `**/` at the start or `/**/` in the middle stands for any number of directories, including none, and `/**` at the end for everything inside. Within a name, `**` is the same as `*`, so `**.min.js` means `*.min.js`.
+- A pattern with no `/` except at the end (like `*.min.js` or `vendor/`) matches in every directory; one with a leading or inner `/` (like `/setup.py` or `docs/**`) only from the repository root.
+- A trailing `/` matches directories only, and a pattern that matches a directory covers every file in it.
+- Every other character matches itself, case-sensitively, `#` and spaces included (a `.gitignore` would read a leading `#` as a comment and drop trailing spaces).
+
+Negation (a leading `!`), `[` and `]` (character classes), backslashes (escapes) and `**` inside a name before a `/` (like `foo**/bar`, which git itself reads inconsistently) make the file invalid, rather than silently matching something other than what a `.gitignore` would. The report notes which files were skipped.
 
 **Rule ids.** Each finding's id is in the JSON report (`"rule"`), and the review summary shows it next to each counted rule.
 
 | Id | Flags | Severity | Applies to |
 |----|-------|----------|------------|
-| `todo-comment` | `TODO` / `FIXME` in a comment | LOW | source files |
+| `todo-comment` | `TODO` / `FIXME` in a comment or docstring | LOW | source files |
 | `console-log` | `console.log(` | LOW | JavaScript / TypeScript |
 | `print-call` | `print(` | LOW | Python |
 | `bare-except` | `except:` | MEDIUM | Python |
@@ -218,6 +277,7 @@ Configuration error: .pr-analyzer.toml on main is invalid:
 | `semgrep` | the whole Semgrep scan | per Semgrep rule | changed files |
 | `dependency-audit` | the whole pip-audit check | HIGH | `requirements*.txt` |
 | `llm` | the whole LLM review | per suggestion | the diff |
+| `config` | a problem in the copy of `.pr-analyzer.toml` a PR adds or changes | HIGH | `.pr-analyzer.toml` |
 
 To tune individual Semgrep rules, point `SEMGREP_CONFIG` at your own ruleset.
 
@@ -245,7 +305,7 @@ jobs:
       pull-requests: write    # post the review
     steps:
       - id: pr
-        uses: Quantumstringfloops/PRanalyzer@<commit-sha>   # pin a commit, as for any action
+        uses: Quantumstringfloops/PRanalyzer@main   # for stability, pin a release tag or a commit SHA
         with:
           llm-provider: openai                              # optional: leave out to skip the LLM
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -273,7 +333,7 @@ No checkout step is needed: the action reads the PR through the GitHub API and i
 - On `pull_request`, PRs from forks get a read-only token and no secrets, so the review can't be posted; skip them with `if: github.event.pull_request.head.repo.full_name == github.repository` on the job, as this repository's own workflow does.
 - With `llm-provider: ollama`, set `OLLAMA_URL` in the step's `env:`.
 - `config` reads a file from the workspace. If the job checks out the PR, that is the PR's own code, which could loosen its own checks, so prefer the base branch's `.pr-analyzer.toml` unless the file comes from somewhere the PR can't change.
-- pr-analyzer runs outside the workspace, so a `.env` file in the PR can't change its settings, and the log can't be fed workflow commands by text from the PR.
+- pr-analyzer is installed and run outside the workspace, with Python isolated (`-I`), so files in a checked-out PR can't stand in for pip or any other module, a `.env` file in the PR can't change its settings, and the log can't be fed workflow commands by text from the PR.
 
 ---
 
@@ -330,7 +390,7 @@ Settings come from environment variables or a `.env` file in the directory you r
 | `PIP_AUDIT_TIMEOUT_SECONDS` | ❌ | `300` | Time limit for pip-audit |
 | `GITHUB_TIMEOUT_SECONDS` | ❌ | `30` | Time limit for each GitHub API request |
 | `GITHUB_MAX_WORKERS` | ❌ | `8` | Files whose content is fetched at the same time |
-| `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS` | ❌ | `60` | Longest wait for a GitHub rate limit to reset; a longer one fails the run (exit code 2). `0` = never wait |
+| `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS` | ❌ | `60` | Longest wait for a GitHub rate limit to reset. A longer one fails the run while the PR is fetched (exit code 2); when the review is posted, it leaves the review out with a warning. `0` = never wait |
 | `CACHE_ENABLED` | ❌ | `true` | `false` turns the [on-disk cache](#caching) off |
 | `CACHE_DIR` | ❌ | `$XDG_CACHE_HOME/pr-analyzer`, else `~/.cache/pr-analyzer` | Where the cache lives |
 | `CACHE_MAX_SIZE_MB` | ❌ | `500` | Beyond this, the least recently used entries are removed |
@@ -343,7 +403,7 @@ Settings come from environment variables or a `.env` file in the directory you r
 
 **Fetching.** The full content of `GITHUB_MAX_WORKERS` files is fetched at a time, each worker thread with a GitHub client of its own. With 100 ms per request, a 50-file PR took 19.2 s before and takes 3.1 s now (`benchmarks/fetch_benchmark.py`).
 
-**Rate limits.** When GitHub answers with a rate limit (403 or 429), the request is sent again once the limit allows: after `Retry-After` seconds, at `X-RateLimit-Reset` for the hourly limit, or after a minute when GitHub doesn't say. Waits are logged, and the other requests hold back meanwhile. A wait longer than `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS` isn't sat out: the run stops with exit code 2 and says when to try again.
+**Rate limits.** When GitHub answers with a rate limit (403 or 429), the request is sent again once the limit allows: after `Retry-After` (seconds, or a date), at `X-RateLimit-Reset` for the hourly limit, or after a minute when GitHub doesn't say. Each wait is logged as a warning, and the other requests hold back meanwhile; Ctrl-C ends the waits at once. A wait longer than `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS` isn't sat out. While the PR is fetched, the run then stops with exit code 2 and says when to try again. When the review is posted (`--post-review`, the last step), the report still stands: the review is left out, a warning says when to try again, and the exit code follows the verdict.
 
 **LLM review in parts.** A diff of up to `MAX_DIFF_LINES` lines is reviewed in one request, as before. A bigger one is split into parts of whole files (a file too big for one part is cut between hunks, or between lines, keeping its line numbers), each reviewed in its own request, and the suggestions are merged. `LLM_TOKEN_BUDGET` caps what one run sends: once the next part would go over it, the remaining parts are skipped and a warning says how many files weren't AI-reviewed. If a request fails, the parts already reviewed are kept and the warning says what was left out. Parts are sent one at a time by default, because Ollama may queue parallel requests (see its `OLLAMA_NUM_PARALLEL`) and time spent in its queue counts towards `LLM_TIMEOUT_SECONDS`; for OpenAI and Anthropic, `LLM_MAX_CONCURRENCY=2` to `4` reviews a big PR faster.
 
@@ -354,7 +414,9 @@ Results that can't change are kept on disk, in `CACHE_DIR`:
 - **file contents**, by git blob SHA: a file that didn't change keeps its blob SHA from push to push, so a new push fetches only the files it changed;
 - **LLM replies**, by provider, model and the exact prompt: re-running the same diff costs no tokens and doesn't count towards `LLM_TOKEN_BUDGET`.
 
-Failed requests are never cached, and neither is anything that contains your API keys or looks like a token or private key. A damaged entry counts as a miss, entries are written atomically, and the size and age limits are applied at most once an hour. The directory is private to your user, since it may hold code from private repositories. `--no-cache` skips the cache for one run (for a fresh LLM review, say); `CACHE_ENABLED=false` turns it off.
+Failed requests are never cached, and neither is a file or reply that contains your `GITHUB_TOKEN`, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, or any of these: a private key block (PEM, OpenSSH or PGP), a PuTTY key file, or a GitHub, OpenAI or Anthropic (`sk-`), AWS access key ID (`AKIA`, `ASIA`), Slack (`xox?-`), Stripe live (`sk_live_`, `rk_live_`), Google API (`AIza`), GitLab (`glpat-`) or Hugging Face (`hf_`) token. Other secrets, such as an AWS secret access key on its own or a password in a database URL, aren't recognised and can be cached. A damaged entry counts as a miss, entries are written atomically, and the size and age limits are applied at most once an hour. `--no-cache` skips the cache for one run (for a fresh LLM review, say); `CACHE_ENABLED=false` turns it off.
+
+Since the cache may hold code from private repositories, pr-analyzer creates its directory private to your user (mode 700). It uses an existing `CACHE_DIR`, and the `v1` folder in it, only if each is a real directory (not a symbolic link) that belongs to you: one that other users can open too is made private, and anything else turns the cache off for the run, with a warning. Entries are read only from your own files, never through a symbolic link, and pruning deletes nothing but the cache's own entry and temporary files. On Windows, which has no POSIX owners or modes, only symbolic links are refused.
 
 To keep the cache between GitHub Actions runs, restore and save it with `actions/cache`. A saved cache can't be updated, so each run saves a new one and the next run restores the newest:
 
@@ -428,10 +490,10 @@ A PR is **blocked** if any suggestion has severity `CRITICAL` or `HIGH`, regardl
 ## Troubleshooting
 
 **`zsh: command not found: pr-analyzer`**
-Activate the virtualenv you installed `pranalyzer` into, or use `pipx install pranalyzer`. From a source checkout, run it through Poetry: `poetry run pr-analyzer`.
+Activate the virtualenv you installed `pr-analyzer-cli` into, or use `pipx install pr-analyzer-cli`. From a source checkout, run it through Poetry: `poetry run pr-analyzer`.
 
 **`ModuleNotFoundError: No module named 'pr_analyzer'`**
-Install the package (`pip install pranalyzer`), or from a source checkout run `poetry install` in the `pr-analyzer/` directory (the one with `pyproject.toml`).
+Install the package (`pip install pr-analyzer-cli`), or from a source checkout run `poetry install` in the `pr-analyzer/` directory (the one with `pyproject.toml`).
 
 **`Authentication failed` or `GitHub rate limit hit`**
 Set `GITHUB_TOKEN`. The `.env` file must be in the directory you run the command from, or export the variable in your shell. A rate limit that resets within `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS` is waited out; the message means it resets later than that.
@@ -440,7 +502,7 @@ Set `GITHUB_TOKEN`. The `.env` file must be in the directory you run the command
 The PR was reviewed in parts and some were left out: either `LLM_TOKEN_BUDGET` ran out (raise it, or set `0` for no limit) or an LLM request failed (the warning names the error). The other checks covered every file.
 
 **Warning: `Semgrep scan skipped` / `Dependency audit skipped`**
-The scanners are optional. Install them with `pip install "pranalyzer[security]"` (from source: `poetry install --extras "security"`).
+The scanners are optional. Install them with `pip install "pr-analyzer-cli[security]"` (from source: `poetry install --extras "security"`).
 
 **Warning: `LLM review skipped: Could not reach Ollama`**
 Start Ollama and pull the model (`ollama pull llama3.2`), point `LLM_PROVIDER` at OpenAI or Anthropic, or pass `--skip-llm`.
@@ -484,7 +546,7 @@ Maintainers publish to PyPI by pushing a version tag; `.github/workflows/release
 
 The workflow stops if the tag doesn't match the version, then runs the tests, builds the wheel and sdist, checks them with `twine check --strict`, installs the wheel and runs it, and publishes with PyPI Trusted Publishing, so no API token is stored anywhere. Running the workflow by hand (Actions → Release → Run workflow) publishes the build to TestPyPI instead, as a rehearsal; TestPyPI refuses a version it already has.
 
-One-time setup: on PyPI, add a trusted publisher for the project `pranalyzer` with owner `Quantumstringfloops`, repository `PRanalyzer`, workflow `release.yml` and environment `pypi`; do the same on TestPyPI with environment `testpypi`. Then create both environments under the repository's *Settings → Environments*. Required reviewers on `pypi` make every release wait for an approval.
+One-time setup, before the first tag: on PyPI, add a pending trusted publisher (your account's *Publishing* page) for the project `pr-analyzer-cli` with owner `Quantumstringfloops`, repository `PRanalyzer`, workflow `release.yml` and environment `pypi`; do the same on TestPyPI with environment `testpypi`. PyPI checks the project name there, the same way it does on the first upload, so a name it won't accept is caught before anything is tagged. Then create both environments under the repository's *Settings → Environments*. Required reviewers on `pypi` make every release wait for an approval.
 
 ---
 

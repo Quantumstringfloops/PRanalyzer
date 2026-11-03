@@ -10,14 +10,29 @@ are written to a temporary file and renamed into place, so a reader sees a whole
 an entry that can't be read or decoded counts as a miss. Entries unused for CACHE_MAX_AGE_DAYS
 expire, and once the cache outgrows CACHE_MAX_SIZE_MB the least recently used go first.
 
-Nothing that could hold a credential is written: callers never cache errors, and a value that
-contains one of our own keys, or looks like a well-known token or private key, is skipped.
+The cache may hold code from private repositories, and anyone else who could write to it could
+plant entries, or make prune() delete files elsewhere through a symbolic link. So <dir> and
+<dir>/v1 are created private to the user (PRIVATE_MODE), and before either is used it must be a
+real directory (not a symbolic link) that belongs to the user: one of the user's that others can
+use too is made private, and anything else turns the cache off for the run, with a warning.
+Entries are read only from the user's own regular files, never through a symbolic link, and
+prune() deletes nothing but entry and temporary files in <kind>/<2 hex digits>/, following no
+symbolic link.
+
+Callers never cache errors. A value isn't written if it contains one of our own keys (`secrets`:
+open_cache passes GITHUB_TOKEN, OPENAI_API_KEY and ANTHROPIC_API_KEY; values under 8 characters
+don't count) or matches CREDENTIAL: a private key block (PEM, OpenSSH or PGP), a PuTTY key file,
+or a GitHub, OpenAI or Anthropic (sk-), AWS access key ID (AKIA, ASIA), Slack (xox?-), Stripe live
+(sk_live_, rk_live_), Google API (AIza), GitLab (glpat-) or Hugging Face (hf_) token. Other
+secrets, such as an AWS secret access key on its own or a password in a database URL, aren't
+recognised.
 """
 import contextlib
 import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 import threading
 import time
@@ -43,15 +58,36 @@ PRUNE_STAMP = ".last-prune"
 TEMP_PREFIX = ".tmp-"
 # shorter values can't be real keys, and matching them would keep almost anything out
 MIN_SECRET_LENGTH = 8
+PRIVATE_MODE = 0o700
+# the names prune() may delete in <kind>/<2 hex digits>/: entries, and the temporary files
+# tempfile.mkstemp names
+BUCKET_NAME = re.compile(r"[0-9a-f]{2}")
+ENTRY_NAME = re.compile(r"[0-9a-f]{64}")
+TEMP_NAME = re.compile(re.escape(TEMP_PREFIX) + r"[a-z0-9_]+")
+# an entry is never opened through a symbolic link, nor waits on a FIFO put in its place
+READ_FLAGS = (
+    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    | getattr(os, "O_BINARY", 0)
+)
 
 # tokens and keys a file or an LLM reply might contain; such values never reach the disk
 GITHUB_TOKEN_FORMAT = r"gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}"
 OPENAI_ANTHROPIC_KEY_FORMAT = r"sk-[A-Za-z0-9_-]{20,}"
-AWS_KEY_ID_FORMAT = r"AKIA[0-9A-Z]{16}"
-PRIVATE_KEY_HEADER = r"-----BEGIN [A-Z ]*PRIVATE KEY-----"
-CREDENTIAL = re.compile("|".join(
-    (GITHUB_TOKEN_FORMAT, OPENAI_ANTHROPIC_KEY_FORMAT, AWS_KEY_ID_FORMAT, PRIVATE_KEY_HEADER)
-))
+AWS_KEY_ID_FORMAT = r"(?:AKIA|ASIA)[0-9A-Z]{16}"   # long-term and temporary (STS) key IDs
+SLACK_TOKEN_FORMAT = r"xox[a-z]-[0-9A-Za-z-]{10,}"
+STRIPE_LIVE_KEY_FORMAT = r"[rs]k_live_[0-9A-Za-z]{20,}"
+GOOGLE_API_KEY_FORMAT = r"AIza[0-9A-Za-z_-]{35}"
+GITLAB_TOKEN_FORMAT = r"glpat-[0-9A-Za-z_-]{20,}"
+HUGGING_FACE_TOKEN_FORMAT = r"hf_[A-Za-z0-9]{34}"
+# the first line of a PEM or OpenSSH private key ("BEGIN RSA PRIVATE KEY" between dashes), or of
+# a PGP one ("BEGIN PGP PRIVATE KEY BLOCK")
+PRIVATE_KEY_HEADER = r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----"
+PUTTY_KEY_HEADER = r"PuTTY-User-Key-File-[0-9]+:"
+CREDENTIAL = re.compile("|".join((
+    GITHUB_TOKEN_FORMAT, OPENAI_ANTHROPIC_KEY_FORMAT, AWS_KEY_ID_FORMAT, SLACK_TOKEN_FORMAT,
+    STRIPE_LIVE_KEY_FORMAT, GOOGLE_API_KEY_FORMAT, GITLAB_TOKEN_FORMAT, HUGGING_FACE_TOKEN_FORMAT,
+    PRIVATE_KEY_HEADER, PUTTY_KEY_HEADER,
+)))
 
 
 def default_cache_dir() -> Path:
@@ -68,9 +104,62 @@ def cache_key(kind: str, parts: Iterable[str]) -> str:
     return hashlib.sha256(encoded.encode("ascii")).hexdigest()
 
 
+def current_uid() -> int | None:
+    # None where files have no POSIX owner and mode (Windows): only links are checked there
+    getuid = getattr(os, "getuid", None)
+    return getuid() if getuid is not None else None
+
+
+def directory_problem(path: Path, uid: int | None) -> str | None:
+    """Why the cache mustn't use the directory at `path`, or None if only the user can use it.
+    A directory of the user's that others can use too is made private first. Raises OSError if
+    there's nothing at `path`, or not a directory."""
+    info = os.lstat(path)
+    if stat.S_ISLNK(info.st_mode):
+        return "it is a symbolic link"
+    if not stat.S_ISDIR(info.st_mode):
+        raise NotADirectoryError(f"Not a directory: {str(path)!r}")
+    if uid is None:
+        return None
+    if info.st_uid != uid:
+        return "it belongs to another user"
+    if info.st_mode & 0o077:
+        with contextlib.suppress(OSError):
+            os.chmod(path, PRIVATE_MODE)  # pr-analyzer: ignore - makes the folder private (0700)
+        if os.lstat(path).st_mode & 0o077:
+            return "other users can open it, and it can't be made private"
+    return None
+
+
+def own_file(info: os.stat_result, uid: int | None) -> bool:
+    return stat.S_ISREG(info.st_mode) and (uid is None or info.st_uid == uid)
+
+
+def subdirectories(path: Path) -> list[Path]:
+    """The directories in `path`, leaving out symbolic links to one; none if it can't be read."""
+    try:
+        with os.scandir(path) as items:
+            return [Path(item.path) for item in items if item.is_dir(follow_symlinks=False)]
+    except OSError:
+        return []
+
+
+def regular_files(path: Path) -> list[tuple[Path, os.stat_result]]:
+    """The regular files in `path` with their lstat, leaving out symbolic links; none if it
+    can't be read."""
+    files = []
+    with contextlib.suppress(OSError), os.scandir(path) as items:
+        for item in items:
+            with contextlib.suppress(OSError):
+                info = item.stat(follow_symlinks=False)
+                if stat.S_ISREG(info.st_mode):
+                    files.append((Path(item.path), info))
+    return files
+
+
 class DiskCache:
-    """Safe to share between threads: every entry is its own file, and only the counters are
-    shared state."""
+    """Safe to share between threads: every entry is its own file, and only the counters and
+    the result of the directory check are shared state."""
 
     def __init__(
         self,
@@ -88,6 +177,8 @@ class DiskCache:
         self._lock = threading.Lock()
         self.hits = self.misses = self.writes = 0
         self.writable = True   # until a write fails: then the run carries on without writing
+        self._checked = False   # <dir> and <dir>/v1 passed directory_problem
+        self._unsafe = False    # one of them didn't: the cache is off for the run
 
     @classmethod
     def disabled(cls) -> "DiskCache":
@@ -95,12 +186,12 @@ class DiskCache:
 
     @property
     def enabled(self) -> bool:
-        return self.root is not None
+        return self.root is not None and not self._unsafe
 
     def get(self, kind: str, *parts: str) -> str | None:
-        if self.root is None:
+        if not self.enabled:
             return None
-        value = self._read(self._path(kind, parts))
+        value = self._read(self._path(kind, parts)) if self._usable(create=False) else None
         with self._lock:
             if value is None:
                 self.misses += 1
@@ -109,12 +200,13 @@ class DiskCache:
         return value
 
     def put(self, kind: str, *parts: str, value: str) -> None:
-        if self.root is None or not self.writable or not self.storable(value):
+        if not self.enabled or not self.writable or not self.storable(value):
             return
         path = self._path(kind, parts)
         data = zlib.compress(json.dumps({"value": value}).encode("ascii"))
         try:
-            self._make_root()
+            if not self._usable(create=True):
+                return
             path.parent.mkdir(parents=True, exist_ok=True)
             write_atomically(path, data, mtime=self.clock())
         except OSError as e:
@@ -131,7 +223,7 @@ class DiskCache:
         return not CREDENTIAL.search(value) and not any(s in value for s in self.secrets)
 
     def close(self) -> None:
-        if self.root is None:
+        if not self.enabled:
             return
         log.info("cache_used", hits=self.hits, misses=self.misses, writes=self.writes)
         if self.writes and self._prune_due():
@@ -139,16 +231,17 @@ class DiskCache:
 
     def prune(self) -> None:
         """Drop expired entries, then the least recently used until the cache fits its size."""
-        if self.root is None or not self.root.is_dir():
+        if not self.enabled or not self._usable(create=False):
             return
+        assert self.root is not None
         now = self.clock()
         entries = []
-        for path, stat in self._entries():
-            age = now - stat.st_mtime
+        for path, info in self._entries():
+            age = now - info.st_mtime
             if age > self.max_age_seconds:
                 discard(path)
             elif not path.name.startswith(TEMP_PREFIX):
-                entries.append((stat.st_mtime, stat.st_size, path))
+                entries.append((info.st_mtime, info.st_size, path))
             elif age > PRUNE_INTERVAL_SECONDS:
                 discard(path)   # left behind by a writer that crashed
 
@@ -171,11 +264,14 @@ class DiskCache:
     def _read(self, path: Path) -> str | None:
         now = self.clock()
         try:
-            with open(path, "rb") as handle:
-                expired = now - os.fstat(handle.fileno()).st_mtime > self.max_age_seconds
+            with open(os.open(path, READ_FLAGS), "rb") as handle:
+                info = os.fstat(handle.fileno())
+                if not own_file(info, current_uid()):
+                    return None   # nobody else's file is ever served as an entry
+                expired = now - info.st_mtime > self.max_age_seconds
                 data = b"" if expired else handle.read()
         except OSError:
-            return None   # not cached yet, or unreadable
+            return None   # not cached yet, unreadable, or a symbolic link
         if expired:
             return None   # prune() deletes it
         try:
@@ -191,12 +287,35 @@ class DiskCache:
             os.utime(path, (now, now))
         return value
 
-    def _make_root(self) -> None:
+    def _usable(self, create: bool) -> bool:
+        """Whether <dir> and <dir>/v1 are there and safe to use. They're checked until they pass,
+        after being created if `create`, and one that isn't safe turns the cache off for the run.
+        Raises OSError if `create` and they can't be made."""
+        if self._checked:
+            return True
+        with self._lock:
+            if not (self._checked or self._unsafe):
+                try:
+                    self._check_directories(create)
+                except OSError:
+                    if create:
+                        raise
+                    # not made yet, so there's nothing to read
+            return self._checked
+
+    def _check_directories(self, create: bool) -> None:
         assert self.root is not None
-        if not self.root.is_dir():
-            # private: the cache holds file contents, which may come from private repositories
-            self.root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            self.root.mkdir(mode=0o700, exist_ok=True)
+        for path in (self.root.parent, self.root):
+            if create:
+                # private: the cache holds file contents, which may come from private repositories
+                path.mkdir(mode=PRIVATE_MODE, parents=True, exist_ok=True)
+            problem = directory_problem(path, current_uid())
+            if problem is not None:
+                self._unsafe = True
+                log.warning("cache_dir_unsafe", path=str(path), problem=problem,
+                            hint="caching off for this run: use a CACHE_DIR of your own")
+                return
+        self._checked = True
 
     def _prune_due(self) -> bool:
         assert self.root is not None
@@ -207,14 +326,19 @@ class DiskCache:
         return self.clock() - last > PRUNE_INTERVAL_SECONDS
 
     def _entries(self) -> Iterator[tuple[Path, os.stat_result]]:
+        """The entry and temporary files in <kind>/<2 hex digits>/, with their lstat: the only
+        files prune() may delete. No symbolic link is followed."""
         assert self.root is not None
-        for dirpath, _, filenames in os.walk(self.root):
-            for name in filenames:
-                if name == PRUNE_STAMP:
+        for kind in subdirectories(self.root):
+            for bucket in subdirectories(kind):
+                if not BUCKET_NAME.fullmatch(bucket.name):
                     continue
-                path = Path(dirpath) / name
-                with contextlib.suppress(OSError):
-                    yield path, path.stat()
+                for path, info in regular_files(bucket):
+                    name = path.name
+                    if TEMP_NAME.fullmatch(name) or (
+                        ENTRY_NAME.fullmatch(name) and name.startswith(bucket.name)
+                    ):
+                        yield path, info
 
 
 def write_atomically(path: Path, data: bytes, mtime: float) -> None:

@@ -67,7 +67,7 @@ def show(line: str = "") -> None:
 def blob_sha(text: str) -> str:
     # git's object id for the file's content, which GitHub reports as the file's "sha"
     data = text.encode()
-    return hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()  # pr-analyzer: ignore - git blob ids are SHA-1 by definition
 
 
 def make_file(index: int, lines: list[str]) -> dict:

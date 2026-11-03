@@ -48,16 +48,22 @@ WELL_KNOWN_NUMBERS = frozenset({
     255, 65535,                                     # the largest 8- and 16-bit values
     80, 443,                                        # the HTTP and HTTPS ports
 }) | {int(status) for status in HTTPStatus}        # standard HTTP status codes, 100 to 511
+# int() refuses a literal of thousands of digits, and no well-known number is that long
+WELL_KNOWN_DIGITS = len(str(max(WELL_KNOWN_NUMBERS)))
 # `timeout=30`, `retries = 5`, `"port": 8080`, `{ port: 8080 }`: the name right before the number
 # says what it means. Comparisons (==, <=, ...) and augmented assignments (+=) don't name it.
 NAMED_BY = re.compile(r"(?:\b[A-Za-z_]\w*|[\"'\]])\s*(?::|(?<![=!<>+\-*/%&|^~:@])=)\s*[-+]?$")
+# How far before a number to look for the name or the `[` that explains it. A line of a usual
+# length is searched in full; searching a whole generated line again for each of its thousands of
+# numbers took minutes.
+NUMBER_CONTEXT = 120
 
 
 def in_subscript(code: str, pos: int) -> bool:
     """Whether `pos` is inside [...] that follows a name, a call or a string: an index or a slice
     such as `line[:72]` or `parts[-2]`, not a list literal."""
-    opening = code.rfind("[", 0, pos)
-    if opening < 1 or code.rfind("]", 0, pos) > opening:
+    opening = code.rfind("[", max(0, pos - NUMBER_CONTEXT), pos)
+    if opening < 1 or code.find("]", opening, pos) != -1:
         return False
     before = code[opening - 1]
     return before.isalnum() or before in "_)]\"'"
@@ -65,17 +71,18 @@ def in_subscript(code: str, pos: int) -> bool:
 
 def explained_number(code: str, match: re.Match[str]) -> bool:
     """A number a reader understands without a named constant."""
+    digits, start = match.group(), match.start()
     return (
-        int(match.group()) in WELL_KNOWN_NUMBERS
-        or NAMED_BY.search(code, 0, match.start()) is not None
-        or in_subscript(code, match.start())
+        (len(digits) <= WELL_KNOWN_DIGITS and int(digits) in WELL_KNOWN_NUMBERS)
+        or NAMED_BY.search(code, max(0, start - NUMBER_CONTEXT), start) is not None
+        or in_subscript(code, start)
     )
 
 
 # Each rule runs on one added line at a time (the text after the leading "+"). Its "id" is the
-# stable name .pr-analyzer.toml uses to switch it off. Its "scope" picks the view of the line it
-# reads (see line_lexer): "code" leaves out comments and the contents of strings, "comments" is
-# the comments alone. An optional "exempt" callable can wave off individual matches.
+# stable name .pr-analyzer.toml uses to switch it off. Its "scope" picks the views of the line it
+# reads (see line_lexer): "code" leaves out comments and the contents of strings, "code+comments"
+# only the contents of strings. An optional "exempt" callable can wave off individual matches.
 # Hardcoded secrets are not checked here: the security scanner owns them, and checking them in
 # both places used to penalise the same line twice.
 PATTERNS: list[dict[str, Any]] = [
@@ -83,8 +90,9 @@ PATTERNS: list[dict[str, Any]] = [
         "id": "todo-comment",
         "regex": re.compile(r"\b(TODO|FIXME)\b"),
         "extensions": CODE_EXTENSIONS,
-        # in a string the marker is data, such as a status value, not a note to the team
-        "scope": "comments",
+        # In a string the marker is data, such as a status value, not a note to the team. The
+        # middle lines of a docstring or a /* */ comment read as code, so code counts too.
+        "scope": "code+comments",
         "severity": "LOW",
         "category": "style",
         "title": "TODO/FIXME comment added",
@@ -298,7 +306,11 @@ def patterns_for(filename: str, disabled: Collection[str] = ()) -> list[dict[str
 
 
 def line_matches(pattern: dict[str, Any], parts: LineParts) -> bool:
-    text = parts.comments if pattern["scope"] == "comments" else parts.code
+    views = (parts.code, parts.comments) if pattern["scope"] == "code+comments" else (parts.code,)
+    return any(view_matches(pattern, view) for view in views)
+
+
+def view_matches(pattern: dict[str, Any], text: str) -> bool:
     skip_if = pattern.get("skip_if")
     if skip_if is not None and skip_if.search(text):
         return False

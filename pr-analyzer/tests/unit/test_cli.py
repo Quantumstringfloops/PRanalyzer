@@ -166,11 +166,13 @@ def test_config_in_the_current_directory_is_not_used(pipeline, tmp_path, monkeyp
 
     assert getattr(pipeline.instances[0], "project_config", None) is None
 
-def test_invalid_base_branch_config_exits_2(pipeline):
-    pipeline.error = ConfigError(".pr-analyzer.toml on main is invalid:\n  - unknown key 'x'")
+def test_config_error_from_the_pipeline_exits_2(pipeline):
+    # an invalid .pr-analyzer.toml on the base branch no longer raises one: the pipeline uses
+    # the defaults and warns (tests/integration); any ConfigError that does get here exits 2
+    pipeline.error = ConfigError("settings.toml is invalid:\n  - unknown key 'x'")
     result = invoke()
     assert result.exit_code == 2
-    assert "Configuration error: .pr-analyzer.toml on main is invalid" in result.stderr
+    assert "Configuration error: settings.toml is invalid" in result.stderr
 
 # ── help and version ──────────────────────────────────────────────────────────
 def test_help_works():
@@ -188,7 +190,7 @@ def test_version():
     assert result.stdout.startswith("pr-analyzer ")
 
 def test_version_comes_from_the_pypi_distribution(monkeypatch):
-    # the package is published as "pranalyzer"; the old lookup name would always say "unknown"
+    # the package is published as "pr-analyzer-cli"; any other lookup name would say "unknown"
     seen = []
 
     def fake_version(name):
@@ -198,7 +200,7 @@ def test_version_comes_from_the_pypi_distribution(monkeypatch):
     monkeypatch.setattr(cli.importlib.metadata, "version", fake_version)
     result = runner.invoke(cli.app, ["version"])
 
-    assert seen == ["pranalyzer"]
+    assert seen == ["pr-analyzer-cli"]
     assert result.stdout.startswith("pr-analyzer 9.9.9")
 
 def test_version_when_not_installed(monkeypatch):

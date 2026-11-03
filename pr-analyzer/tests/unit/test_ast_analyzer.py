@@ -1,4 +1,5 @@
 import re
+import time
 
 import pytest
 from tree_sitter import Parser
@@ -193,11 +194,23 @@ def test_calls_inside_strings_and_comments_are_not_flagged(line, filename):
 def test_a_call_after_a_string_is_still_flagged():
     assert rules_for('label = "#"; print(label)') == ["print-call"]
 
-def test_todo_counts_only_in_comments():
+def test_todo_counts_in_comments_but_not_in_strings():
     assert rules_for('status = "TODO"') == []
+    assert rules_for('label = f"TODO: {name}"') == []
     assert rules_for("x = 1  # TODO: tidy") == ["todo-comment"]
     assert rules_for("run();  // FIXME later", "app.js") == ["todo-comment"]
     assert rules_for("run(); /* TODO */", "app.ts") == ["todo-comment"]
+
+@pytest.mark.parametrize("line, filename", [
+    ("    TODO: support the v2 format.", "parse.py"),            # a docstring's middle line
+    ('"""TODO: document this."""', "parse.py"),                  # a one-line docstring
+    ('    """Parse the header. TODO: handle v2.', "parse.py"),   # a docstring's first line
+    ("   FIXME: this races with the reconnect", "socket.js"),    # inside a /* */ comment
+    ("case '\"': quoted = !quoted; // TODO: escapes", "lexer.c"),   # after a character literal
+])
+def test_todo_in_docstrings_and_comment_bodies(line, filename):
+    # only # and // comments used to count, so these notes went unreported
+    assert rules_for(line, filename) == ["todo-comment"]
 
 # ── magic numbers ─────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("line, filename", [
@@ -216,6 +229,7 @@ def test_todo_counts_only_in_comments():
     ("if sys.version_info >= (3, 11):", "app.py"),         # a version check names its numbers
     ('log.info("retried 25 times")', "app.py"),           # numbers in strings and comments
     ("retry()  # at most 25 times", "app.py"),
+    ('label = f"{name:>25}"', "app.py"),                  # and in a format spec
 ])
 def test_explained_numbers_are_not_magic(line, filename):
     assert "magic-number" not in rules_for(line, filename)
@@ -227,9 +241,42 @@ def test_explained_numbers_are_not_magic(line, filename):
     "sizes = [25, 50]",      # a list literal isn't an index
     "if count == 25:",       # a comparison doesn't name its number
     "total += 25",
+    'msg = f"{total * 25} left"',   # the code in an f-string's field is code
 ])
 def test_unexplained_numbers_are_still_flagged(line):
     assert "magic-number" in rules_for(line)
+
+# ── C-family and PHP ──────────────────────────────────────────────────────────
+@pytest.mark.parametrize("line, filename", [
+    ("#define CACHE_TTL_SECONDS 90", "cache.h"),   # the named constant the rule asks for
+    ("#if defined(_MSC_VER) && _MSC_VER >= 1900", "compat.h"),
+    ("#pragma warning disable 1591", "Api.cs"),
+])
+def test_preprocessor_lines_are_not_magic_numbers(line, filename):
+    assert "magic-number" not in rules_for(line, filename)
+
+def test_php_hash_comment_is_a_comment():
+    assert rules_for("# TODO: remove this hack", "index.php") == ["todo-comment"]
+
+# ── long lines ────────────────────────────────────────────────────────────────
+def test_a_long_generated_line_is_checked_quickly():
+    # each number here is explained by the key before it, which was looked for by searching the
+    # line again from its start: 8,000 entries took 7 seconds and 16,000 half a minute
+    line = "export default {" + ",".join(f'"k{i}":{37 + i % 50}' for i in range(8000)) + "};"
+    start = time.perf_counter()
+    rules = rules_for(line, "table.js")
+    assert time.perf_counter() - start < 1
+    assert rules == ["long-line"]
+
+def test_a_number_thousands_of_digits_long_does_not_crash():
+    # int() refuses more than 4,300 digits: the ValueError stopped the whole analysis
+    assert "magic-number" in rules_for("x = (" + "7" * 5000 + ")")
+
+def test_numbers_far_into_a_long_line_are_still_explained():
+    padding = "x = 1; " * 40
+    assert "magic-number" not in rules_for(padding + "fetch(url, timeout=37)")
+    assert "magic-number" not in rules_for(padding + "last = parts[-37]")
+    assert "magic-number" in rules_for(padding + "wait(37)")
 
 # ── rule ids ──────────────────────────────────────────────────────────────────
 def test_rule_ids_are_unique_and_kebab_case():

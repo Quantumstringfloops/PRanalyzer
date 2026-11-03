@@ -5,9 +5,11 @@ from pr_analyzer.exceptions import ConfigError
 from pr_analyzer.project_config import (
     RULE_IDS,
     ProjectConfig,
+    config_findings,
     glob_regex,
     load_project_config,
     parse_project_config,
+    read_project_config,
     severity_rank,
 )
 
@@ -63,7 +65,7 @@ def test_raw_bytes_are_accepted():
     assert parse_project_config(b'disable = ["todo-comment"]').disable == {"todo-comment"}
 
 def test_every_check_has_an_id_to_disable():
-    stages = {"complexity", "file-length", "semgrep", "dependency-audit", "llm"}
+    stages = {"complexity", "file-length", "semgrep", "dependency-audit", "llm", "config"}
     assert stages | {"long-line", "magic-number", "hardcoded-password", "sql-injection"} <= RULE_IDS
     assert parse_project_config(f"disable = {sorted(RULE_IDS)}").disable == RULE_IDS
 
@@ -115,6 +117,60 @@ def test_message_names_the_file_it_came_from():
     with pytest.raises(ConfigError, match=r"\.pr-analyzer\.toml on main is invalid"):
         parse_project_config("x = 1", source=".pr-analyzer.toml on main")
 
+# ── reading without stopping ──────────────────────────────────────────────────
+def test_read_returns_the_settings_and_no_problems():
+    assert read_project_config(b'disable = ["llm"]') == (ProjectConfig(disable=frozenset({"llm"})), [])
+
+def test_read_falls_back_to_the_defaults_and_names_every_problem():
+    # a broken file on the base branch used to stop every run; the caller now warns instead
+    config, problems = read_project_config('disabel = []\nblock_on = ["SEVERE"]')
+    assert config == ProjectConfig()
+    assert problems == [
+        "unknown key 'disabel' (did you mean 'disable'?)",
+        "block_on: 'SEVERE' is not a severity; use one of LOW, MEDIUM, HIGH, CRITICAL",
+    ]
+
+def test_read_applies_no_part_of_an_invalid_file():
+    # the valid half of a broken file isn't what the project chose either
+    config, _ = read_project_config('block_on = ["CRITICAL"]\ndisable = ["magic-numbers"]')
+    assert config == ProjectConfig()
+
+@pytest.mark.parametrize("raw, problem", [
+    (b"\xff\xfe", "the file is not UTF-8 text"),
+    ('disable = ["llm"', "the file is not valid TOML: "),
+])
+def test_read_names_files_that_cannot_be_parsed(raw, problem):
+    config, problems = read_project_config(raw)
+    assert config == ProjectConfig()
+    assert [p[:len(problem)] for p in problems] == [problem]
+
+# ── a PR's own copy ───────────────────────────────────────────────────────────
+def test_pr_copy_problems_are_blocking_findings():
+    # a typo used to merge unnoticed, then stop every later run
+    [finding] = config_findings('disable = ["magic-numbers"]\n')
+
+    problem = "disable: unknown rule id 'magic-numbers' (did you mean 'magic-number'?)"
+    assert finding.title == f"Invalid config: {problem}"
+    assert (finding.filename, finding.severity, finding.rule_id) == (".pr-analyzer.toml", "HIGH", "config")
+    assert (finding.line, finding.source, finding.category) == (None, "static", "style")
+    assert problem in finding.description and "never applied" in finding.description
+
+def test_pr_copy_gets_one_finding_per_problem():
+    findings = config_findings('disabel = []\n[thresholds]\nmax_file_lines = 0')
+    assert [f.title for f in findings] == [
+        "Invalid config: unknown key 'disabel' (did you mean 'disable'?)",
+        "Invalid config: thresholds.max_file_lines must be a whole number above 0, not 0",
+    ]
+
+def test_valid_pr_copy_has_no_findings():
+    assert config_findings('disable = ["magic-number"]\nignore_paths = ["docs/**"]') == []
+
+def test_pr_copy_that_is_not_utf8_is_reported():
+    # GitHub hands a PR's files over as text, with U+FFFD for bytes that aren't UTF-8; once
+    # merged, the same file read as bytes from the base branch is rejected
+    [finding] = config_findings('# caf\ufffd\ndisable = ["llm"]')
+    assert "probably not UTF-8 text" in finding.title
+
 # ── ignore_paths ──────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("pattern, path, expected", [
     ("docs/**", "docs/guide/intro.md", True),
@@ -133,14 +189,66 @@ def test_message_names_the_file_it_came_from():
     ("src/?.py", "src/a.py", True),
     ("src/?.py", "src/ab.py", False),
     ("a+b(1).py", "lib/a+b(1).py", True),             # regex characters are taken literally
+    ("a/**/b", "a/b", True),                           # /**/ is any number of directories...
+    ("a/**/b", "a/x/y/b", True),
+    ("docs/**/", "docs/sub/a.md", True),               # ...and with a trailing /, only them
+    ("docs/**/", "docs/a.md", False),
+    ("***/x", "a/b/x", True),                          # a longer run of asterisks is a ** too
 ])
 def test_glob_matching(pattern, path, expected):
+    assert bool(glob_regex(pattern).fullmatch(path)) is expected
+
+@pytest.mark.parametrize("pattern, path, expected", [
+    # as in git, ** crosses directories only as a whole path segment; within a name it is a *.
+    # It used to cross them anywhere, ignoring files that a .gitignore line wouldn't.
+    ("foo**bar", "foo_bar", True),
+    ("foo**bar", "foo/x/bar", False),
+    ("docs/**.md", "docs/a.md", True),
+    ("docs/**.md", "docs/a/b.md", False),
+    ("a/**b", "a/xb", True),
+    ("a/**b", "a/x/b", False),
+    ("**.min.js", "static/js/app.min.js", True),       # no / means any directory, as before
+    ("build**/", "out/build-tmp/a.o", True),           # build* for directories
+    ("build**/", "build-tmp", False),
+])
+def test_double_star_inside_a_name_is_a_single_star(pattern, path, expected):
     assert bool(glob_regex(pattern).fullmatch(path)) is expected
 
 def test_ignores_checks_every_pattern():
     config = ProjectConfig(ignore_paths=("docs/**", "*.lock"))
     assert config.ignores("poetry.lock") and config.ignores("docs/a.md")
     assert not config.ignores("src/app.py")
+
+@pytest.mark.parametrize("pattern, expected", [
+    # each used to be read literally and match nothing (or the wrong files), without an error
+    ("!docs/keep.md", "'!docs/keep.md' uses negation (a leading !), which isn't supported"),
+    ("*.py[co]", "'*.py[co]' uses [ or ] (a character class in git), which isn't supported"),
+    ("[Dd]ocs/", "'[Dd]ocs/' uses [ or ]"),
+    ("docs]", "'docs]' uses [ or ]"),
+    ("docs\\api", "'docs\\\\api' uses a backslash, which isn't supported"),
+    ("\\#notes.md", "'\\\\#notes.md' uses a backslash"),
+    ("foo**/bar", "'foo**/bar' has ** inside a name before a /, which isn't supported"),
+])
+def test_unsupported_gitignore_syntax_is_rejected(pattern, expected):
+    toml = f"ignore_paths = ['docs/**', '{pattern}']"
+    assert f"ignore_paths: {expected}" in problems(toml)
+
+def test_unsupported_patterns_say_what_to_write_instead():
+    message = problems("ignore_paths = ['!a', 'b[12]', 'c\\d', 'e**/f']")
+    assert "ignore_paths can only leave files out" in message
+    assert "list each name, or use ? for any one character" in message
+    assert "/ separates directories" in message
+    assert "write foo*/bar for one directory, or foo*/**/bar for any number" in message
+    assert message.count("\n  - ") == 4
+
+@pytest.mark.parametrize("pattern", [
+    "docs/**", "**/fixtures/**", "/setup.py", "vendor/", "*.min.js", "**.min.js", "foo**bar",
+    "src/?.py", "a/**/b", "**", "build**/", "docs/!draft.md", "#notes.md", "a b.txt",
+])
+def test_supported_patterns_are_accepted(pattern):
+    # a ! after the start and a # are plain characters; only a leading ! means negation. And
+    # build**/ ends in the trailing / of a directory pattern, not in a ** before a /
+    assert parse_project_config(f"ignore_paths = ['{pattern}']").ignore_paths == (pattern,)
 
 # ── severities ────────────────────────────────────────────────────────────────
 def test_severity_rank_orders_severities_in_any_case():

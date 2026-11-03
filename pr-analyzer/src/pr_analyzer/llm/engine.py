@@ -8,7 +8,7 @@ from pr_analyzer.cache import DiskCache
 from pr_analyzer.config import settings
 from pr_analyzer.exceptions import ConfigError, LLMError
 from pr_analyzer.llm import review
-from pr_analyzer.llm.chunking import review_requests
+from pr_analyzer.llm.chunking import review_requests, split_files
 from pr_analyzer.llm.prompts import CATEGORIES, SEVERITIES, SYSTEM_PROMPT
 from pr_analyzer.models import PRSummary, Suggestion
 
@@ -37,6 +37,16 @@ LLM_RULE = "llm"
 FENCED = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 # part of every cached reply's key; bump it when the way requests are made changes
 REPLY_FORMAT = "1"
+WORD = re.compile(r"\w+")
+
+# what makes two suggestions the same remark: file, line, category and title
+RepeatKey = tuple[str, int | None, str, str]
+
+
+def repeat_key(suggestion: Suggestion) -> RepeatKey:
+    # replies word the same title with different case, spacing and punctuation
+    title = " ".join(WORD.findall(suggestion.title.casefold()))
+    return suggestion.filename, suggestion.line, suggestion.category, title
 
 
 class LLMEngine:
@@ -73,19 +83,21 @@ class LLMEngine:
             keep=self.is_json_reply,
         )
 
-        items = [item for raw in replies for item in self.parse_response(raw)]
-        suggestions = [s for s in (self.to_suggestion(item, pr) for item in items) if s is not None]
-        suggestions = self.filter_confidence(suggestions)
-        suggestions = self.filter_duplicates(suggestions, existing_findings)
-        if len(requests) > 1:
-            suggestions = self.filter_repeats(suggestions)
+        # each reply's suggestions stay apart: only a remark that more than one reply makes can
+        # be a repeat, and filter_repeats needs to know which reply made it
+        parsed = [self.parse_response(raw) for raw in replies]
+        per_reply = []
+        for items in parsed:
+            found = [s for s in (self.to_suggestion(item, pr) for item in items) if s is not None]
+            per_reply.append(self.filter_duplicates(self.filter_confidence(found), existing_findings))
+        suggestions = self.filter_repeats(per_reply, split_files(requests))
 
         log.info(
             "llm analysis complete",
             provider=provider,
             model=self.model_name(provider),
             requests=len(requests),
-            returned=len(items),
+            returned=sum(len(items) for items in parsed),
             kept=len(suggestions),
         )
         return suggestions
@@ -112,7 +124,7 @@ class LLMEngine:
             import openai
         except ImportError as e:
             raise LLMError("LLM_PROVIDER=openai needs the openai package: "
-                           "pip install 'pranalyzer[openai]'") from e
+                           "pip install 'pr-analyzer-cli[openai]'") from e
         if not settings.openai_api_key:
             raise LLMError("OPENAI_API_KEY is not set")
 
@@ -142,7 +154,7 @@ class LLMEngine:
             import anthropic
         except ImportError as e:
             raise LLMError("LLM_PROVIDER=anthropic needs the anthropic package: "
-                           "pip install 'pranalyzer[anthropic]'") from e
+                           "pip install 'pr-analyzer-cli[anthropic]'") from e
         if not settings.anthropic_api_key:
             raise LLMError("ANTHROPIC_API_KEY is not set")
 
@@ -305,13 +317,20 @@ class LLMEngine:
         return [s for s in suggestions if (s.filename, s.line, s.category) not in existing_keys]
 
     @staticmethod
-    def filter_repeats(suggestions: list[Suggestion]) -> list[Suggestion]:
-        # a file split over several requests can draw the same remark from each of them
-        seen: set[tuple[str, int | None, str]] = set()
-        kept = []
-        for s in suggestions:
-            key = (s.filename, s.line, s.category)
-            if key not in seen:
-                seen.add(key)
-                kept.append(s)
-        return kept
+    def filter_repeats(per_reply: list[list[Suggestion]], split: set[str]) -> list[Suggestion]:
+        """The replies' suggestions in order, less the repeats. A file reviewed in parts (one of
+        `split`) can draw the same remark (see repeat_key) from more than one request; when
+        several replies make it, only the reply with its most severe copy keeps it (the first of
+        them, on a tie). One reply's own suggestions are never merged, nor are those on a file
+        that went out whole: they are distinct remarks, as in a single request."""
+        best: dict[RepeatKey, tuple[int, int]] = {}   # remark -> (severity, -reply) to keep
+        for number, suggestions in enumerate(per_reply):
+            for s in suggestions:
+                if s.filename in split:
+                    rank = (SEVERITIES.index(s.severity), -number)
+                    key = repeat_key(s)
+                    best[key] = max(best.get(key, rank), rank)
+        return [
+            s for number, suggestions in enumerate(per_reply) for s in suggestions
+            if s.filename not in split or best[repeat_key(s)][1] == -number
+        ]
