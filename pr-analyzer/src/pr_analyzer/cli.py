@@ -42,9 +42,13 @@ def fail(*messages: str) -> NoReturn:
     raise typer.Exit(code=EXIT_ERROR)
 
 
+# the name on PyPI; the command and the import package are still called pr-analyzer / pr_analyzer
+DISTRIBUTION = "pranalyzer"
+
+
 def package_version() -> str:
     try:
-        return importlib.metadata.version("pr-analyzer")
+        return importlib.metadata.version(DISTRIBUTION)
     except importlib.metadata.PackageNotFoundError:
         return "unknown"
 

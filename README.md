@@ -66,26 +66,39 @@ Every check reports only lines the PR adds, so a PR is never blamed for code it 
 
 ---
 
+## Install
+
+Python 3.11 or newer. The package is called `pranalyzer` on PyPI; the command it installs is `pr-analyzer`.
+
+```bash
+pip install pranalyzer                  # static checks, secret scanning, LLM review through Ollama
+pip install "pranalyzer[security]"      # adds Semgrep and pip-audit
+pip install "pranalyzer[openai]"        # adds the OpenAI SDK, for LLM_PROVIDER=openai
+pip install "pranalyzer[anthropic]"     # adds the Anthropic SDK, for LLM_PROVIDER=anthropic
+```
+
+Extras combine: `pip install "pranalyzer[security,openai]"`. `pipx install pranalyzer` works too.
+
 ## Quickstart
 
 ```bash
-# 1. clone
-git clone https://github.com/Quantumstringfloops/PRanalyzer.git
-cd PRanalyzer/pr-analyzer
-
-# 2. install (Poetry 2.x). Extras: security (Semgrep + pip-audit), openai, anthropic
-pip install poetry
-poetry install --extras "security"
-
-# 3. configure (a GitHub token is optional for public repos)
-cp .env.example .env
-# edit .env: GITHUB_TOKEN, plus the LLM settings if you don't run Ollama locally
-
-# 4. run
-poetry run pr-analyzer analyze https://github.com/owner/repo/pull/123
+export GITHUB_TOKEN=ghp_...      # optional for public repos; needed for private ones and --post-review
+pr-analyzer analyze https://github.com/owner/repo/pull/123
 ```
 
 The default LLM is a local Ollama model (`ollama pull llama3.2`). If Ollama isn't running, the review still completes without LLM suggestions and says so; use `--skip-llm` to skip it on purpose, or set `LLM_PROVIDER` to `openai` or `anthropic` (install the matching extra).
+
+### From source (contributors)
+
+```bash
+git clone https://github.com/Quantumstringfloops/PRanalyzer.git
+cd PRanalyzer/pr-analyzer
+pip install "poetry>=2.2"
+poetry install --all-extras
+cp .env.example .env            # then fill in GITHUB_TOKEN and the LLM settings
+poetry run pr-analyzer analyze https://github.com/owner/repo/pull/123
+poetry run pytest
+```
 
 ---
 
@@ -230,16 +243,16 @@ A PR is **blocked** if any suggestion has severity `CRITICAL` or `HIGH`, regardl
 ## Troubleshooting
 
 **`zsh: command not found: pr-analyzer`**
-Run through Poetry: `poetry run pr-analyzer`, or activate the virtualenv first.
+Activate the virtualenv you installed `pranalyzer` into, or use `pipx install pranalyzer`. From a source checkout, run it through Poetry: `poetry run pr-analyzer`.
 
 **`ModuleNotFoundError: No module named 'pr_analyzer'`**
-Run `poetry install` from the `pr-analyzer/` directory (the one with `pyproject.toml`).
+Install the package (`pip install pranalyzer`), or from a source checkout run `poetry install` in the `pr-analyzer/` directory (the one with `pyproject.toml`).
 
 **`Authentication failed` or `GitHub rate limit hit`**
 Set `GITHUB_TOKEN`. The `.env` file must be in the directory you run the command from, or export the variable in your shell.
 
 **Warning: `Semgrep scan skipped` / `Dependency audit skipped`**
-The scanners are optional. Install them with `poetry install --extras "security"` (or `pip install semgrep pip-audit`).
+The scanners are optional. Install them with `pip install "pranalyzer[security]"` (from source: `poetry install --extras "security"`).
 
 **Warning: `LLM review skipped: Could not reach Ollama`**
 Start Ollama and pull the model (`ollama pull llama3.2`), point `LLM_PROVIDER` at OpenAI or Anthropic, or pass `--skip-llm`.
@@ -268,3 +281,9 @@ Only MEDIUM, HIGH and CRITICAL findings get inline comments, and only on lines t
 - **Base branch delta scoring** — compare score against the base branch to show whether the PR improved or degraded quality
 - **Dependency audit for `pyproject.toml` and lock files**
 - **Web dashboard** — timeline of PR scores per repository
+
+---
+
+## License
+
+MIT. See [LICENSE](https://github.com/Quantumstringfloops/PRanalyzer/blob/main/LICENSE).

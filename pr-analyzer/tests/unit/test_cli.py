@@ -139,3 +139,24 @@ def test_version():
     result = runner.invoke(cli.app, ["version"])
     assert result.exit_code == 0
     assert result.stdout.startswith("pr-analyzer ")
+
+def test_version_comes_from_the_pypi_distribution(monkeypatch):
+    # the package is published as "pranalyzer"; the old lookup name would always say "unknown"
+    seen = []
+
+    def fake_version(name):
+        seen.append(name)
+        return "9.9.9"
+
+    monkeypatch.setattr(cli.importlib.metadata, "version", fake_version)
+    result = runner.invoke(cli.app, ["version"])
+
+    assert seen == ["pranalyzer"]
+    assert result.stdout.startswith("pr-analyzer 9.9.9")
+
+def test_version_when_not_installed(monkeypatch):
+    def not_installed(name):
+        raise cli.importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(cli.importlib.metadata, "version", not_installed)
+    assert runner.invoke(cli.app, ["version"]).stdout.startswith("pr-analyzer unknown")

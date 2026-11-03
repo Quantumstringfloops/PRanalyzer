@@ -56,7 +56,7 @@ class DepAuditScanner:
             executable = tools.find_tool("pip-audit")
             if executable is None:
                 self._warn("Dependency audit skipped: pip-audit is not installed "
-                           "(pip install 'pr-analyzer[security]')")
+                           "(pip install 'pranalyzer[security]')")
                 break
 
             log.info("running pip-audit", filename=file.filename, packages=len(pins))
