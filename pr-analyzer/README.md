@@ -66,27 +66,69 @@ Every check reports only lines the PR adds, so a PR is never blamed for code it 
 
 ---
 
-## Install
+## Getting Started
 
-Python 3.11 or newer. The package is called `pr-analyzer-cli` on PyPI (`pr-analyzer` there is an unrelated project); the command it installs is `pr-analyzer`.
+You need Python 3.11 or newer. The package is called `pr-analyzer-cli` (`pr-analyzer` on PyPI is an unrelated project), and the command it installs is `pr-analyzer`.
+
+### 1. Install
 
 ```bash
-pip install pr-analyzer-cli                  # static checks, secret scanning, LLM review through Ollama
-pip install "pr-analyzer-cli[security]"      # adds Semgrep and pip-audit
-pip install "pr-analyzer-cli[openai]"        # adds the OpenAI SDK, for LLM_PROVIDER=openai
-pip install "pr-analyzer-cli[anthropic]"     # adds the Anthropic SDK, for LLM_PROVIDER=anthropic
+pip install "pr-analyzer-cli[security]"
 ```
 
-Extras combine: `pip install "pr-analyzer-cli[security,openai]"`. `pipx install pr-analyzer-cli` works too.
-
-## Quickstart
+Or straight from GitHub, for the latest `main`:
 
 ```bash
-export GITHUB_TOKEN=ghp_...      # optional for public repos; needed for private ones and --post-review
+pip install "pr-analyzer-cli[security] @ git+https://github.com/Quantumstringfloops/PRanalyzer.git#subdirectory=pr-analyzer"
+```
+
+> Until the first release is on PyPI, use the GitHub line.
+
+`[security]` adds Semgrep and pip-audit. Leave it out for a smaller install, or add `openai` or `anthropic` for those LLM providers, for example `[security,openai]`. `pipx install` works too.
+
+### 2. Analyse a pull request
+
+```bash
+pr-analyzer analyze https://github.com/pallets/flask/pull/6176 --skip-llm
+```
+
+This runs the static and security checks, then prints a score, a grade and every finding.
+
+Public repositories work without a token, though GitHub allows only 60 requests an hour without one. For private repositories, for posting reviews, or for big PRs, set a token first:
+
+```bash
+export GITHUB_TOKEN=ghp_...   # classic: the repo scope; fine-grained: read access to Contents and Pull requests
+```
+
+### 3. Add the AI review (optional)
+
+Pick a provider and drop `--skip-llm`:
+
+```bash
+# a local model through Ollama (the default provider; the Ollama app or `ollama serve` must be running)
+ollama pull llama3.2
+pr-analyzer analyze https://github.com/owner/repo/pull/123
+
+# OpenAI
+pip install "pr-analyzer-cli[security,openai]"
+export LLM_PROVIDER=openai OPENAI_API_KEY=sk-...
+pr-analyzer analyze https://github.com/owner/repo/pull/123
+
+# Anthropic
+pip install "pr-analyzer-cli[security,anthropic]"
+export LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-...
 pr-analyzer analyze https://github.com/owner/repo/pull/123
 ```
 
-The default LLM is a local Ollama model (`ollama pull llama3.2`). If Ollama isn't running, the review still completes without LLM suggestions and says so; use `--skip-llm` to skip it on purpose, or set `LLM_PROVIDER` to `openai` or `anthropic` (install the matching extra).
+If the provider can't be reached, the run still finishes without LLM suggestions and says so.
+
+### 4. Use it in CI, or on every pull request
+
+- `--output json` and `--output markdown` print a report other tools can read. The exit code is `0` when the PR passed, `1` when it's blocked, and `2` when it couldn't be analysed.
+- `--post-review` posts the result on the PR as a review with inline comments.
+- To review every pull request automatically, add the GitHub Action; see [Use it in GitHub Actions](#use-it-in-github-actions).
+
+Settings can also come from environment variables, or from a `.env` file in the directory you run it from. `.env.example` lists them all.
 
 ### From source (contributors)
 
@@ -95,8 +137,7 @@ git clone https://github.com/Quantumstringfloops/PRanalyzer.git
 cd PRanalyzer/pr-analyzer
 pip install "poetry>=2.2"
 poetry install --all-extras
-cp .env.example .env            # then fill in GITHUB_TOKEN and the LLM settings
-poetry run pr-analyzer analyze https://github.com/owner/repo/pull/123
+poetry run pr-analyzer analyze https://github.com/owner/repo/pull/123 --skip-llm
 poetry run pytest
 ```
 
@@ -264,7 +305,7 @@ jobs:
       pull-requests: write    # post the review
     steps:
       - id: pr
-        uses: Quantumstringfloops/PRanalyzer@<commit-sha>   # pin a commit, as for any action
+        uses: Quantumstringfloops/PRanalyzer@main   # for stability, pin a release tag or a commit SHA
         with:
           llm-provider: openai                              # optional: leave out to skip the LLM
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
