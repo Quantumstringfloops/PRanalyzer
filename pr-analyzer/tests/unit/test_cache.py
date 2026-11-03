@@ -6,7 +6,7 @@ import pytest
 from structlog.testing import capture_logs
 
 from pr_analyzer import cache as cache_module
-from pr_analyzer.cache import DiskCache, default_cache_dir, open_cache
+from pr_analyzer.cache import DiskCache, cache_key, default_cache_dir, open_cache
 
 NOW = 1_800_000_000.0
 DAY = 24 * 60 * 60
@@ -26,6 +26,15 @@ def make_cache(tmp_path, clock=None, **kwargs) -> DiskCache:
 
 def entry_files(cache: DiskCache):
     return sorted(p for p in cache.root.rglob("*") if p.is_file() and p.name != ".last-prune")
+
+
+def entry_path(cache: DiskCache, kind: str, *parts: str):
+    key = cache_key(kind, parts)
+    return cache.root / kind / key[:2] / key
+
+
+def files_in(folder) -> dict:
+    return {path: path.read_bytes() for path in folder.rglob("*") if path.is_file()}
 
 
 def overwrite(path, data: bytes, mtime: float = NOW) -> None:
@@ -172,6 +181,71 @@ def test_entry_is_never_read_through_a_symbolic_link(tmp_path):
 
     assert cache.get("contents", "k") is None
     assert elsewhere.exists()
+
+@pytest.mark.parametrize("level", ["kind", "bucket"])
+def test_no_entry_is_read_or_written_through_a_linked_folder(tmp_path, level):
+    # planted while v1 was open: the target's owner could read entries there, or swap them
+    cache = make_cache(tmp_path)
+    cache.put("contents", "k", value="kept elsewhere")
+    bucket = entry_path(cache, "contents", "k").parent
+    linked, elsewhere = (bucket.parent if level == "kind" else bucket), tmp_path / "elsewhere"
+    linked.rename(elsewhere)
+    linked.symlink_to(elsewhere, target_is_directory=True)
+    before = files_in(elsewhere)
+
+    with capture_logs() as logs:
+        assert make_cache(tmp_path).get("contents", "k") is None
+        make_cache(tmp_path).put("contents", "k", value="written there")
+
+    assert files_in(elsewhere) == before
+    assert [(entry["event"], entry["path"], entry["problem"]) for entry in logs] == [
+        ("cache_dir_unsafe", str(linked), "it is a symbolic link")] * 2   # once per run
+
+def test_no_entry_is_written_to_a_folder_of_another_user(tmp_path, monkeypatch):
+    cache = make_cache(tmp_path)
+    cache.put("contents", "k", value="v")   # the cache's own directories pass their check here
+    another_user(monkeypatch)               # and now <kind> and its folders are someone else's
+
+    with capture_logs() as logs:
+        cache.put("contents", "other", value="v")
+
+    assert len(entry_files(cache)) == 1
+    assert [(entry["event"], entry["problem"]) for entry in logs] == [
+        ("cache_dir_unsafe", "it belongs to another user")]
+
+@pytest.mark.parametrize("link", [os.link, os.symlink], ids=["hard", "symbolic"])
+def test_entry_linked_to_another_file_is_a_miss(tmp_path, monkeypatch, link):
+    # the cache never links an entry: through a link, another file (another entry, here) would be
+    # served in its place. Windows has no O_NOFOLLOW, so opening an entry there follows a link.
+    monkeypatch.setattr(cache_module, "READ_FLAGS", os.O_RDONLY | os.O_NONBLOCK)
+    cache = make_cache(tmp_path)
+    cache.put("contents", "a", value="one")
+    cache.put("contents", "b", value="two")
+    b = entry_path(cache, "contents", "b")
+    b.unlink()
+    link(entry_path(cache, "contents", "a"), b)
+
+    assert cache.get("contents", "b") is None
+
+@pytest.mark.parametrize("opened", ["cache", "cache/v1"])
+def test_cache_files_are_deleted_when_a_folder_is_made_private(tmp_path, opened):
+    # until then others could have planted entries, linked them to other files, or swapped them
+    cache = make_cache(tmp_path)
+    cache.put("contents", "a", value="one")
+    cache.put("contents", "b", value="two")
+    cache.prune()   # leaves its stamp
+    a, b = entry_path(cache, "contents", "a"), entry_path(cache, "contents", "b")
+    a.rename(tmp_path / "a")
+    b.rename(a)
+    (tmp_path / "a").rename(b)
+    os.chmod(tmp_path / opened, 0o777)  # pr-analyzer: ignore - a folder anyone can write to
+
+    with capture_logs() as logs:
+        assert make_cache(tmp_path).get("contents", "b") is None
+
+    assert mode(tmp_path / opened) == 0o700
+    assert entry_files(cache) == [] and not os.path.lexists(cache.root / ".last-prune")
+    assert [(entry["event"], entry["files"]) for entry in logs] == [("cache_cleared", 3)]
 
 # ── damaged entries ───────────────────────────────────────────────────────────
 @pytest.mark.parametrize("data", [
@@ -369,6 +443,19 @@ def test_prune_follows_no_symbolic_link_inside_the_cache(tmp_path):
 
     assert not entry.exists()
     assert target.exists() and linked_entry.is_symlink()
+
+def test_a_planted_prune_stamp_is_neither_trusted_nor_written_through(tmp_path):
+    cache = make_cache(tmp_path)
+    cache.put("contents", "k", value="v")
+    recent, stamp = tmp_path / "recent", cache.root / ".last-prune"
+    overwrite(recent, b"the user's file", mtime=NOW - 60)
+    stamp.symlink_to(recent)
+    os.utime(stamp, (NOW, NOW), follow_symlinks=False)   # the link itself says "just now" too
+
+    cache.close()   # prunes all the same: the stamp isn't the cache's own file
+
+    assert (recent.read_bytes(), recent.stat().st_mtime) == (b"the user's file", NOW - 60)
+    assert stat.S_ISREG(os.lstat(stamp).st_mode) and os.lstat(stamp).st_mtime == NOW
 
 def test_close_prunes_after_writes_at_most_hourly(tmp_path, monkeypatch):
     clock = Clock()
