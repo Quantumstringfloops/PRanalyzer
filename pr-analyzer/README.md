@@ -1,6 +1,7 @@
 # PR Analyzer
 
 [![CI](https://github.com/Quantumstringfloops/PRanalyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/Quantumstringfloops/PRanalyzer/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/pr-analyzer-cli)](https://pypi.org/project/pr-analyzer-cli/)
 
 An AI-powered pull request analysis tool that combines static analysis, security scanning, and LLM review into a single CLI command. Point it at any GitHub PR URL and it returns a quality score, a letter grade, line-level suggestions, and an optional GitHub review with inline comments.
 
@@ -81,8 +82,6 @@ Or straight from GitHub, for the latest `main`:
 ```bash
 pip install "pr-analyzer-cli[security] @ git+https://github.com/Quantumstringfloops/PRanalyzer.git#subdirectory=pr-analyzer"
 ```
-
-> Until the first release is on PyPI, use the GitHub line.
 
 `[security]` adds Semgrep and pip-audit. Leave it out for a smaller install, or add `openai` or `anthropic` for those LLM providers, for example `[security,openai]`. `pipx install` works too.
 

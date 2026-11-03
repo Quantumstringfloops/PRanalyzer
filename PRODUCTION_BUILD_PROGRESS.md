@@ -103,25 +103,32 @@ Permission to rewrite modules and the added scalability requirements don't chang
   - **Bot preview:** 94.5 (A), passed. Its one Semgrep note was a false positive on the chmod that makes the cache folder private, now marked.
   - **README:** a step-by-step Getting Started, with an install from GitHub that works before the first PyPI release.
 - 2026-11-03: **Publishing setup:** the user added the PyPI pending publisher for `pr-analyzer-cli`, and a fresh GitHub `pypi` environment was created. `gh` is logged in as Quantumstringfloops.
+- 2026-11-03: **PR #5 merged** (`3244eb9`) once CI and the bot passed; the user asked for the merge to be done for them. All 24 fixes were verified, and the verifiers logged 10 new low-severity edge cases for a follow-up.
+- 2026-11-03: **Demo for LinkedIn.**
+  - Demo PR #6 held deliberately flawed code. The bot gave it 59.4 (F), BLOCKED, with 11 inline comments, and the PR was closed unmerged afterwards.
+  - A 57-second 1080p MP4, rendered from real captures, and the LinkedIn post are in `linkedin-demo/`, which git ignores.
+- 2026-11-03: **Released `pr-analyzer-cli` 0.1.0 to PyPI** from tag `v0.1.0`, on the user's go, with provenance attestations.
+  - The first two publish attempts failed with `invalid-publisher`. The pending publisher's repository was `PRAnalyzer`, but GitHub's claim is `PRanalyzer`, and PyPI compares the name exactly. After the user re-added it, the third attempt published.
+  - Checked with `pip install "pr-analyzer-cli[security]"` in a fresh venv: version 0.1.0, and a live public PR passes.
 
 ## Work Remaining
 
 - **Production build:** none. The gate stopped it.
 - **Free-CLI track:**
-  - open PR #5 from `fix/review-findings` and merge it once CI and the bot pass. The user asked for the merge to be done for them.
-  - Release `v0.1.0` to PyPI by pushing the tag, after PR #5 merges and only on the user's go.
-  - Demo for LinkedIn:
-    - a demo PR with deliberately flawed code, approved by the user, to be closed unmerged after recording;
-    - capture the terminal and GitHub views, and render the MP4 and GIF (renderer: `scratchpad/video/make_demo.py`);
-    - write the final LinkedIn post. Deliverables go in `linkedin-demo/`, which git ignores.
-  - Optionally purge the dead keys from git history: a force-push, only with explicit approval.
+  - a 0.1.1 follow-up for the 10 low-severity edge cases the fix verifiers logged, for example:
+    - a crafted `.pr-analyzer.toml` in a PR crashing the run;
+    - a lexer nesting guard hiding an `eval`;
+    - comments posted by the old bot version being reposted once;
+    - Ctrl-C on Windows;
+  - optionally purge the dead keys from git history: a force-push, only with explicit approval.
 - **User actions:**
-  - update the local dev venv (`poetry install --all-extras` in `pr-analyzer/`).
+  - update the local dev venv (`poetry install --all-extras` in `pr-analyzer/`);
+  - post the LinkedIn video and text.
 
 ## Next Step
 
 **Do not start or resume a production build from this file.** The gate failed.
 
-Open PR #5 from `fix/review-findings` with `gh pr create`, wait for CI and the bot, and merge it with `gh pr merge`. Then do the demo, the video and the LinkedIn post, and the `v0.1.0` release once the user says go.
+The free tool is released: `pip install pr-analyzer-cli`. If the user asks, work through the 0.1.1 follow-ups in a new branch and PR, then release with the next tag.
 
 If the user changes the preconditions above and explicitly asks, re-run the gate.
