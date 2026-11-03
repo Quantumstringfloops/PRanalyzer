@@ -4,7 +4,7 @@ import re
 import pytest
 
 from pr_analyzer.github.markdown import ZERO_WIDTH_SPACE as ZW
-from pr_analyzer.github.markdown import code_span, neutralise, neutralise_line
+from pr_analyzer.github.markdown import code_span, comparable, neutralise, neutralise_line
 
 # ── what gets neutralised ─────────────────────────────────────────────────────
 @pytest.mark.parametrize("text, expected", [
@@ -56,7 +56,7 @@ def test_text_still_reads_the_same():
     "> ```gh-1\n\n`@a`",   # once gh-1 is broken, it must still read as a language name
 ])
 def test_neutralising_twice_changes_nothing_more(text):
-    # the review's "already posted" check compares comment bodies byte for byte
+    # the zero-width spaces a first pass put in are kept, and change nothing a second pass decides
     once = neutralise(text)
     assert neutralise(once) == once
 
@@ -269,3 +269,32 @@ def test_nothing_neutralised_is_live_for_a_commonmark_parser():
 ])
 def test_code_span(text, expected):
     assert code_span(text) == expected
+
+# ── comparing posted text ─────────────────────────────────────────────────────
+# the review compares comments in this form to tell which findings have one already, whichever
+# version posted them
+@pytest.mark.parametrize("posted, now", [
+    (f"Use `rows[0]{ZW}`, ask @{ZW}a", f"Use `rows[0]`, ask @{ZW}a"),   # zero-width spaces
+    ("one\r\ntwo\rthree", "one\ntwo\nthree"),                           # line endings
+    ("a hard break  \nand a tab\t\n", "a hard break\nand a tab"),       # spaces at line ends
+])
+def test_comparable_text_leaves_out_formatting(posted, now):
+    assert comparable(posted) == comparable(now)
+
+@pytest.mark.parametrize("posted, now", [
+    ("Use `rows[0]`", "Use `rows[1]`"),
+    ("```\n    return x\n```", "```\nreturn x\n```"),   # indentation
+    ("`a  b`", "`a b`"),                               # spaces within a line
+    ("```\na\nb\n```", "```\na b\n```"),               # line breaks
+    ("```\na\n\nb\n```", "```\na\nb\n```"),            # blank lines
+])
+def test_comparable_text_keeps_everything_else(posted, now):
+    assert comparable(posted) != comparable(now)
+
+def test_comparable_text_leaves_out_all_that_neutralising_adds():
+    # so a comment counts as posted wherever a version put its zero-width spaces
+    rng = random.Random(0)
+    for _ in range(2000):
+        text = "".join(rng.choice(PIECES) for _ in range(rng.randint(1, 24)))
+        assert comparable(neutralise(text)) == comparable(text), repr(text)
+        assert comparable(neutralise_line(text)) == comparable(" ".join(text.split())), repr(text)

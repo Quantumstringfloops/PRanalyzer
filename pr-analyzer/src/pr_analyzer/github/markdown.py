@@ -105,6 +105,16 @@ def code_span(text: str) -> str:
     return f"{fence}{padding}{text}{padding}{fence}"
 
 
+def comparable(text: str) -> str:
+    """The text as the review compares it with comments already posted, whichever version
+    posted them: without zero-width spaces, which versions of neutralise() put in different
+    places, with every line ending as "\\n", and without spaces or tabs at the end of a line or
+    whitespace around the text. Nothing else changes, so text that differs in anything more,
+    such as code and its indentation, still differs."""
+    lines = _LINE_ENDING.split(str(text).replace(ZERO_WIDTH_SPACE, ""))[::2]
+    return "\n".join(line.rstrip(" \t") for line in lines).strip()
+
+
 def _neutralise_inline(line: str, trust_code: bool = True) -> tuple[str, bool]:
     """One line of Markdown neutralised outside its code spans, and whether the later lines of
     its paragraph can no longer trust theirs: a run of backticks left open could pair with one of
