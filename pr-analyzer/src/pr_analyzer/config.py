@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     # GitHub: the token is optional for public repos (unauthenticated = 60 requests/hour)
     github_token: str = ""
     github_timeout_seconds: int = Field(default=30, gt=0)
+    # longest wait for a rate limit to reset before giving up; 0 = never wait
+    github_rate_limit_max_wait_seconds: float = Field(default=60, ge=0)
 
     # LLM review
     llm_provider: str = "ollama"      # "ollama" | "openai" | "anthropic"

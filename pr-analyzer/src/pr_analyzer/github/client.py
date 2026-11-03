@@ -7,7 +7,6 @@ from github import Auth, Github, GithubException, RateLimitExceededException
 from github.Commit import Commit
 from github.GithubObject import NotSet, Opt
 from github.PullRequest import PullRequest, ReviewComment
-from urllib3.util.retry import Retry
 
 from pr_analyzer.config import settings
 from pr_analyzer.exceptions import (
@@ -19,6 +18,7 @@ from pr_analyzer.exceptions import (
     RateLimitError,
     RepositoryNotFoundError,
 )
+from pr_analyzer.github.ratelimit import RateLimitPause, github_retry
 from pr_analyzer.models import FileChange, PRSummary, Suggestion
 
 log = structlog.get_logger(__name__)
@@ -32,18 +32,15 @@ REVIEW_MARKER = "<!-- pr-analyzer -->"
 
 class GithubClient:
 
-    def __init__(self, token: str | None = None):
+    def __init__(self, token: str | None = None, rate_limits: RateLimitPause | None = None):
         self.token = settings.github_token if token is None else token
-        # retry transient 5xx errors on reads; rate-limit 403s are not retried but surface as
-        # RateLimitError, so the user learns when to try again instead of the CLI sleeping for it
-        retry = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=(500, 502, 503, 504),
-            raise_on_status=False,
-        )
+        # retry transient 5xx errors on reads, and wait out rate limits for up to
+        # GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS; a longer wait surfaces as RateLimitError
+        self.retry = github_retry(settings.github_rate_limit_max_wait_seconds, rate_limits)
         auth = Auth.Token(self.token) if self.token else None
-        self.git_instance = Github(auth=auth, timeout=settings.github_timeout_seconds, retry=retry)
+        self.git_instance = Github(
+            auth=auth, timeout=settings.github_timeout_seconds, retry=self.retry
+        )
 
     def close(self) -> None:
         self.git_instance.close()
