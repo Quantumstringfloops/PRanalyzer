@@ -82,6 +82,11 @@ def test_one_finding_per_advisory_with_line_numbers(fake_pip_audit):
     assert "CVE-2018-1000656" in found[0].description
     assert "upgrade to 0.12.3" in found[0].description
 
+def test_findings_carry_the_stage_rule_id(fake_pip_audit):
+    # .pr-analyzer.toml switches the whole audit off with this id
+    fake_pip_audit(stdout=json.dumps(AUDIT_OUTPUT), returncode=1)
+    assert {s.rule_id for s in DepAuditScanner().scan([make_file()])} == {"dependency-audit"}
+
 def test_audit_failure_becomes_warning(fake_pip_audit):
     # pip-audit exits 1 for failures too; that used to be read as "no vulnerabilities"
     fake_pip_audit(stdout="", returncode=1)

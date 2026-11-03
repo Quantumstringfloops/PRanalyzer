@@ -1,5 +1,5 @@
 import pytest
-from pr_analyzer.security.scanner import SecurityScanner
+from pr_analyzer.security.scanner import RULE_IDS, SecurityScanner
 from pr_analyzer.models import FileChange, Suggestion
 
 def make_file(patch: str, status: str = "modified", filename: str = "test.py") -> FileChange:
@@ -221,3 +221,24 @@ def test_tool_findings_and_warnings_are_collected():
 
     assert results == [finding]
     assert scanner_with_tools.warnings == ["Dependency audit skipped: pip-audit is not installed"]
+
+# ── rule ids and disabling ────────────────────────────────────────────────────
+def test_rule_ids_are_unique():
+    assert len(RULE_IDS) == len(set(RULE_IDS))
+
+def test_findings_carry_their_rule_id():
+    file = make_file(added('password = "supersecret"'))  # pr-analyzer: ignore
+    assert [s.rule_id for s in scanner.scan([file])] == ["hardcoded-password"]
+
+def test_disabled_patterns_are_skipped():
+    file = make_file(added("eval(user_input)  # api_key = 'abcdefghijklmnop'"))  # pr-analyzer: ignore
+    assert [s.rule_id for s in scanner.scan([file], disabled={"eval"})] == ["hardcoded-api-key"]
+
+def test_disabled_tools_do_not_run():
+    semgrep, auditor = FakeRunner(warnings=["Semgrep scan skipped"]), FakeRunner()
+    scanner_with_tools = SecurityScanner(semgrep=semgrep, dep_auditor=auditor)
+
+    scanner_with_tools.scan([make_file(added("x = 1"))], disabled={"semgrep", "dependency-audit"})
+
+    assert (semgrep.calls, auditor.calls) == (0, 0)
+    assert scanner_with_tools.warnings == []

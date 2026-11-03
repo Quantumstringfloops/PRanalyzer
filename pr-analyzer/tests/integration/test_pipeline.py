@@ -218,6 +218,18 @@ def test_low_findings_are_counted_not_commented():
     assert "- 2 × TODO" in body and "- 1 × Long line" in body
     assert "Findings not attached" not in body   # LOW findings are no longer listed one by one
 
+def test_low_finding_counts_name_their_rule():
+    # so a project can see which id to put in .pr-analyzer.toml's `disable`
+    pipeline = AnalysisPipeline(skip_llm=True, post_review=True)
+    patch_text = "@@ -0,0 +1,2 @@\n+wait(30)\n+wait(45)"
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=make_pr(patch_text)):
+        with patch.object(pipeline.github, "post_review") as mock_post:
+            pipeline.run("https://github.com/neil/repo/pull/1")
+
+    _, body, _ = mock_post.call_args[0]
+    assert "- 2 × Possible magic number (`magic-number`)" in body
+
 def test_post_review_failure_becomes_warning():
     pipeline = AnalysisPipeline(skip_llm=True, post_review=True)
 

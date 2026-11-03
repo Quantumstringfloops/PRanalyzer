@@ -1,9 +1,13 @@
+import re
+
 import pytest
 from tree_sitter import Parser
 
 from pr_analyzer.analyzer.ast_analyzer import (
     PATTERNS,
+    RULE_IDS,
     StaticAnalyzer,
+    Thresholds,
     count_complexity,
     get_language,
     iter_functions,
@@ -170,3 +174,49 @@ def test_severities_are_valid():
     # a misspelt severity ("MEDUIM") used to crash the scorer
     assert {p["severity"] for p in PATTERNS} <= SEVERITIES
     assert {s.severity for s in analyzer.analyze([added_file(branches(31))])} <= SEVERITIES
+
+# ── rule ids ──────────────────────────────────────────────────────────────────
+def test_rule_ids_are_unique_and_kebab_case():
+    # they are what .pr-analyzer.toml's `disable` list names, so they must stay stable
+    assert len(RULE_IDS) == len(set(RULE_IDS))
+    assert all(re.fullmatch(r"[a-z]+(-[a-z]+)*", rule) for rule in RULE_IDS)
+
+def test_findings_carry_their_rule_id():
+    file = make_file("@@ -0,0 +1,2 @@\n+# TODO: fix this later\n+" + "x" * 130)
+    assert [s.rule_id for s in analyzer.analyze([file])] == ["todo-comment", "long-line"]
+
+def test_disabled_rules_are_skipped():
+    file = make_file("@@ -0,0 +1,2 @@\n+print(x)  # TODO\n+wait(30)", filename="app.py")
+    found = analyzer.analyze([file], disabled={"print-call", "magic-number"})
+    assert [s.rule_id for s in found] == ["todo-comment"]
+
+def test_tree_sitter_checks_can_be_disabled():
+    file = added_file(branches(31) + "x = 1\n" * 500)
+    rules = {s.rule_id for s in analyzer.analyze([file], disabled={"complexity", "file-length"})}
+    assert not rules & {"complexity", "file-length"}
+
+# ── thresholds ────────────────────────────────────────────────────────────────
+def test_line_length_limit_is_configurable():
+    file = make_file("@@ -0,0 +1,1 @@\n+" + "x" * 90, filename="app.py")
+    assert analyzer.analyze([file]) == []
+    [result] = analyzer.analyze([file], thresholds=Thresholds(max_line_length=80))
+    assert (result.rule_id, result.title) == ("long-line", "Line exceeds 80 characters")
+
+def test_complexity_thresholds_are_configurable():
+    file = added_file(branches(6))   # complexity 7
+    assert complexity_findings(analyzer.analyze([file])) == []
+
+    [medium] = complexity_findings(analyzer.analyze([file], thresholds=Thresholds(complexity_medium=5)))
+    [high] = complexity_findings(
+        analyzer.analyze([file], thresholds=Thresholds(complexity_medium=4, complexity_high=6))
+    )
+
+    assert (medium.severity, medium.rule_id) == ("MEDIUM", "complexity")
+    assert "above 5" in medium.description
+    assert high.severity == "HIGH"
+
+def test_file_length_limit_is_configurable():
+    file = added_file("x = 1\n" * 20)
+    assert analyzer.analyze([file]) == []
+    [result] = analyzer.analyze([file], thresholds=Thresholds(max_file_lines=10))
+    assert (result.rule_id, result.title) == ("file-length", "File too long")

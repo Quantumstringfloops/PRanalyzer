@@ -36,7 +36,8 @@ class Suggestion:
     line: int | None = None       # line number in the file if known
     source: str = "static"        # "static" | "security" | "llm"
     confidence: float = 1.0
-    
+    rule_id: str = ""             # the check's stable id, e.g. "magic-number"; config disables by it
+
 @dataclass
 class QualityScore:
     overall_score:    float

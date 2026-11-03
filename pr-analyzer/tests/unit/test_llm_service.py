@@ -167,6 +167,11 @@ def test_prompt_schema_response_is_normalised(llm_settings):
 
     assert (result.filename, result.line, result.severity, result.category) == ("auth.py", 1, "HIGH", "security")
 
+def test_llm_findings_carry_the_stage_rule_id(llm_settings):
+    raw = json.dumps([{"filename": "auth.py", "line": 1, "severity": "LOW", "category": "style",
+                       "title": "t", "description": "d", "confidence": 0.9}])
+    assert [s.rule_id for s in analyze_raw(raw)] == ["llm"]
+
 def test_older_field_names_still_accepted(llm_settings):
     # the old prompt asked for "file" and "line_start"; the parser required "filename" and "line"
     raw = json.dumps([{"file": "auth.py", "line_start": 1, "severity": "medium", "category": "style",

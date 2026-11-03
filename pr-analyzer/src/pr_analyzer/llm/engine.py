@@ -29,6 +29,8 @@ CATEGORY_ALIASES = {
 }
 # keys a model might wrap its list of suggestions in
 WRAPPER_KEYS = ("suggestions", "issues", "findings", "results", "comments")
+# the stage's id in .pr-analyzer.toml
+LLM_RULE = "llm"
 
 
 class LLMEngine:
@@ -223,24 +225,26 @@ class LLMEngine:
         if category not in CATEGORIES:
             category = "style"
 
-        line = item.get("line", item.get("line_start"))
-        try:
-            line = int(line) if line is not None else None
-        except (TypeError, ValueError):
-            line = None
-        if line is not None and line < 1:
-            line = None
-
         return Suggestion(
             filename=filename,
             severity=severity,
             category=category,
             title=title[:200],
             description=str(item.get("description") or "").strip()[:2000],
-            line=line,
+            line=self._line_number(item),
             source="llm",
             confidence=confidence,
+            rule_id=LLM_RULE,
         )
+
+    @staticmethod
+    def _line_number(item: dict) -> int | None:
+        line = item.get("line", item.get("line_start"))
+        try:
+            line = int(line) if line is not None else None
+        except (TypeError, ValueError):
+            return None
+        return line if line is not None and line >= 1 else None
 
     @staticmethod
     def _match_filename(name, pr: PRSummary) -> str | None:

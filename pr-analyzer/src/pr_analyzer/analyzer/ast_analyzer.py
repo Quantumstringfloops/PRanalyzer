@@ -1,7 +1,8 @@
 import os
 import re
 from bisect import bisect_left
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
@@ -38,12 +39,13 @@ CODE_EXTENSIONS = PYTHON | JS_TS | {
 }
 COMMENT_PREFIXES = ("#", "//", "/*", "*")
 
-# Each rule runs on one added line at a time (the text after the leading "+").
+# Each rule runs on one added line at a time (the text after the leading "+"). Its "id" is the
+# stable name .pr-analyzer.toml uses to switch it off.
 # Hardcoded secrets are not checked here: the security scanner owns them, and checking them in
 # both places used to penalise the same line twice.
 PATTERNS: list[dict[str, Any]] = [
     {
-        "id": "TODO",
+        "id": "todo-comment",
         "regex": re.compile(r"\b(TODO|FIXME)\b"),
         "extensions": CODE_EXTENSIONS,
         "skip_comments": False,
@@ -55,7 +57,7 @@ PATTERNS: list[dict[str, Any]] = [
                         "it in code.",
     },
     {
-        "id": "CONSOLE_LOG",
+        "id": "console-log",
         "regex": re.compile(r"\bconsole\.log\s*\("),
         "extensions": JS_TS,
         "skip_comments": True,
@@ -67,7 +69,7 @@ PATTERNS: list[dict[str, Any]] = [
                         "before merging.",
     },
     {
-        "id": "PRINT_STATEMENT",
+        "id": "print-call",
         "regex": re.compile(r"(?<![\w.])print\s*\("),
         "extensions": PYTHON,
         "skip_comments": True,
@@ -79,7 +81,7 @@ PATTERNS: list[dict[str, Any]] = [
                         "logging.",
     },
     {
-        "id": "BARE_EXCEPT",
+        "id": "bare-except",
         "regex": re.compile(r"^\s*except\s*:"),
         "extensions": PYTHON,
         "skip_comments": True,
@@ -92,18 +94,7 @@ PATTERNS: list[dict[str, Any]] = [
                         "instead.",
     },
     {
-        "id": "LONG_LINE",
-        "regex": re.compile(r"^.{121,}$"),
-        "extensions": CODE_EXTENSIONS,
-        "skip_comments": False,
-        "severity": "LOW",
-        "category": "style",
-        "title": "Line exceeds 120 characters",
-        "description": "This added line is unusually long, which can hurt "
-                        "readability. Consider breaking it up.",
-    },
-    {
-        "id": "MAGIC_NUMBER",
+        "id": "magic-number",
         "regex": re.compile(r"[^\w.](?<!0x)\b(?!0\b|1\b)\d{2,}\b"),
         "extensions": CODE_EXTENSIONS,
         "skip_comments": True,
@@ -118,7 +109,7 @@ PATTERNS: list[dict[str, Any]] = [
                         "consider naming it.",
     },
     {
-        "id": "MISSING_TYPE_HINT",
+        "id": "missing-return-type",
         "regex": re.compile(r"^\s*(async\s+)?def\s+\w+\s*\([^)]*\)\s*:"),
         "extensions": PYTHON,
         "skip_comments": True,
@@ -161,6 +152,22 @@ LOGICAL_OPERATORS = {"&&", "||", "??"}
 COMPLEXITY_MEDIUM = 15
 COMPLEXITY_HIGH = 30
 MAX_FILE_LINES = 500
+MAX_LINE_LENGTH = 120
+
+# the checks that compare against a threshold rather than match a pattern
+LONG_LINE_RULE = "long-line"
+COMPLEXITY_RULE = "complexity"
+FILE_LENGTH_RULE = "file-length"
+RULE_IDS = tuple(p["id"] for p in PATTERNS) + (LONG_LINE_RULE, COMPLEXITY_RULE, FILE_LENGTH_RULE)
+
+
+@dataclass(frozen=True)
+class Thresholds:
+    """Limits the static checks compare against; .pr-analyzer.toml can change each one."""
+    complexity_medium: int = COMPLEXITY_MEDIUM   # a function above this is MEDIUM...
+    complexity_high: int = COMPLEXITY_HIGH       # ...and above this, HIGH
+    max_file_lines: int = MAX_FILE_LINES
+    max_line_length: int = MAX_LINE_LENGTH
 
 
 def file_extension(filename: str) -> str:
@@ -243,53 +250,95 @@ def function_name(node: Node) -> str:
     return name.text.decode("utf-8", errors="replace")
 
 
+def patterns_for(filename: str, disabled: Collection[str] = ()) -> list[dict[str, Any]]:
+    """The line rules that apply to this file and aren't switched off."""
+    extension = file_extension(filename)
+    test_file = is_test_file(filename)
+    return [
+        p for p in PATTERNS
+        if p["id"] not in disabled
+        and extension in p["extensions"]
+        and not (test_file and p.get("skip_tests"))
+    ]
+
+
+def line_matches(pattern: dict[str, Any], text: str, comment: bool) -> bool:
+    if comment and pattern["skip_comments"]:
+        return False
+    skip_if = pattern.get("skip_if")
+    if skip_if is not None and skip_if.search(text):
+        return False
+    return pattern["regex"].search(text) is not None
+
+
+def pattern_finding(file: FileChange, pattern: dict[str, Any], line_no: int) -> Suggestion:
+    return Suggestion(
+        filename=file.filename,
+        severity=pattern["severity"],
+        category=pattern["category"],
+        title=pattern["title"],
+        description=pattern["description"],
+        line=line_no,
+        source="static",
+        rule_id=pattern["id"],
+    )
+
+
+def long_line_finding(file: FileChange, line_no: int, limit: int) -> Suggestion:
+    return Suggestion(
+        filename=file.filename,
+        severity="LOW",
+        category="style",
+        title=f"Line exceeds {limit} characters",
+        description="This added line is unusually long, which can hurt readability. "
+                    "Consider breaking it up.",
+        line=line_no,
+        source="static",
+        rule_id=LONG_LINE_RULE,
+    )
+
+
 class StaticAnalyzer:
 
-    def analyze(self, files: list[FileChange]) -> list[Suggestion]:
+    def analyze(
+        self,
+        files: list[FileChange],
+        disabled: Collection[str] = (),
+        thresholds: Thresholds = Thresholds(),
+    ) -> list[Suggestion]:
+        """Run every static check on the files. `disabled` holds rule ids (see RULE_IDS) to skip."""
         suggestions = []
         for file in files:
-            if file.patch is None:
+            if file.patch is None or file.status == "removed":
                 continue
-            if file.status == "removed":
-                continue
-            suggestions.extend(self.scan_patterns(file))
-            suggestions.extend(self.scan_tree_sitter(file))
+            suggestions.extend(self.scan_patterns(file, disabled, thresholds.max_line_length))
+            suggestions.extend(self.scan_tree_sitter(file, disabled, thresholds))
 
         log.info("static analysis complete", total_suggestions=len(suggestions))
         return suggestions
 
-    def scan_patterns(self, file: FileChange) -> list[Suggestion]:
+    def scan_patterns(
+        self, file: FileChange, disabled: Collection[str] = (), max_line_length: int = MAX_LINE_LENGTH
+    ) -> list[Suggestion]:
         if file.patch is None:
             return []
-        extension = file_extension(file.filename)
-        test_file = is_test_file(file.filename)
+        patterns = patterns_for(file.filename, disabled)
+        check_length = (LONG_LINE_RULE not in disabled
+                        and file_extension(file.filename) in CODE_EXTENSIONS)
 
-        suggestions = []
+        suggestions: list[Suggestion] = []
         for line_no, text in iter_added_lines(file.patch):
             comment = is_comment(text)
-            for pattern in PATTERNS:
-                if extension not in pattern["extensions"]:
-                    continue
-                if comment and pattern["skip_comments"]:
-                    continue
-                if test_file and pattern.get("skip_tests"):
-                    continue
-                skip_if = pattern.get("skip_if")
-                if skip_if is not None and skip_if.search(text):
-                    continue
-                if pattern["regex"].search(text):
-                    suggestions.append(Suggestion(
-                        filename=file.filename,
-                        severity=pattern["severity"],
-                        category=pattern["category"],
-                        title=pattern["title"],
-                        description=pattern["description"],
-                        line=line_no,
-                        source="static",
-                    ))
+            suggestions.extend(
+                pattern_finding(file, p, line_no) for p in patterns if line_matches(p, text, comment)
+            )
+            if check_length and len(text) > max_line_length:
+                suggestions.append(long_line_finding(file, line_no, max_line_length))
         return suggestions
 
-    def scan_tree_sitter(self, file: FileChange) -> list[Suggestion]:
+    def scan_tree_sitter(
+        self, file: FileChange, disabled: Collection[str] = (), thresholds: Thresholds = Thresholds()
+    ) -> list[Suggestion]:
         if file.raw_content is None:
             return []
         language = language_name(file.filename)
@@ -297,14 +346,17 @@ class StaticAnalyzer:
             return []
 
         suggestions = []
-        try:
-            tree = Parser(_load_language(language)).parse(file.raw_content.encode("utf-8"))
-            suggestions.extend(self._complex_functions(file, tree.root_node, language))
-        except Exception as e:  # a parser problem must not stop the rest of the analysis
-            log.warning("tree_sitter_failed", filename=file.filename, error=str(e))
+        if COMPLEXITY_RULE not in disabled:
+            try:
+                tree = Parser(_load_language(language)).parse(file.raw_content.encode("utf-8"))
+                suggestions.extend(
+                    self._complex_functions(file, tree.root_node, language, thresholds)
+                )
+            except Exception as e:  # a parser problem must not stop the rest of the analysis
+                log.warning("tree_sitter_failed", filename=file.filename, error=str(e))
 
         lines = len(file.raw_content.splitlines())
-        if lines > MAX_FILE_LINES:
+        if FILE_LENGTH_RULE not in disabled and lines > thresholds.max_file_lines:
             suggestions.append(Suggestion(
                 filename=file.filename,
                 severity="LOW",
@@ -313,13 +365,17 @@ class StaticAnalyzer:
                 description=f"This file has {lines} lines. Consider splitting it into smaller modules.",
                 line=None,
                 source="static",
+                rule_id=FILE_LENGTH_RULE,
             ))
 
         return suggestions
 
-    def _complex_functions(self, file: FileChange, root: Node, language: str) -> list[Suggestion]:
+    def _complex_functions(
+        self, file: FileChange, root: Node, language: str, thresholds: Thresholds
+    ) -> list[Suggestion]:
         # only report functions this PR touches; untouched legacy code isn't the PR's fault
         added = sorted(line_no for line_no, _ in iter_added_lines(file.patch or ""))
+        high, medium = thresholds.complexity_high, thresholds.complexity_medium
         suggestions = []
         for function in iter_functions(root, language):
             start, end = function.start_point[0] + 1, function.end_point[0] + 1
@@ -328,10 +384,10 @@ class StaticAnalyzer:
                 continue
 
             complexity = 1 + count_complexity(function, language)
-            if complexity > COMPLEXITY_HIGH:
-                severity, title, limit = "HIGH", "Very high cyclomatic complexity", COMPLEXITY_HIGH
-            elif complexity > COMPLEXITY_MEDIUM:
-                severity, title, limit = "MEDIUM", "High cyclomatic complexity", COMPLEXITY_MEDIUM
+            if complexity > high:
+                severity, title, limit = "HIGH", "Very high cyclomatic complexity", high
+            elif complexity > medium:
+                severity, title, limit = "MEDIUM", "High cyclomatic complexity", medium
             else:
                 continue
 
@@ -345,5 +401,6 @@ class StaticAnalyzer:
                             f"smaller functions.",
                 line=start,
                 source="static",
+                rule_id=COMPLEXITY_RULE,
             ))
         return suggestions

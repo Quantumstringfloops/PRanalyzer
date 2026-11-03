@@ -44,9 +44,13 @@ def findings_off_the_diff(findings: list[Suggestion]) -> list[str]:
 def low_severity_counts(findings: list[Suggestion]) -> list[str]:
     if not findings:
         return []
-    counts = Counter(s.title for s in findings).most_common()
+    # the rule id is what .pr-analyzer.toml's `disable` takes, for a rule a project finds noisy
+    counts = Counter((s.title, s.rule_id) for s in findings).most_common()
     lines = ["", f"**Low-severity findings ({len(findings)}), counted but not commented inline:**"]
-    lines += [f"- {count} × {title}" for title, count in counts[:MAX_LISTED_IN_REVIEW]]
+    lines += [
+        f"- {count} × {title}" + (f" (`{rule}`)" if rule else "")
+        for (title, rule), count in counts[:MAX_LISTED_IN_REVIEW]
+    ]
     if len(counts) > MAX_LISTED_IN_REVIEW:
         rest = sum(count for _, count in counts[MAX_LISTED_IN_REVIEW:])
         lines.append(f"- … and {rest} more")

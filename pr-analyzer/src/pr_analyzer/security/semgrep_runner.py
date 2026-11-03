@@ -13,6 +13,9 @@ from pr_analyzer.security import tools
 
 log = structlog.get_logger(__name__)
 
+# the stage's id in .pr-analyzer.toml; Semgrep's own rule id is in each finding's title
+SEMGREP_RULE = "semgrep"
+
 
 class SemgrepRunner:
 
@@ -103,38 +106,27 @@ class SemgrepRunner:
         if not runs:
             return []
         run = runs[0]
-
-        # semgrep puts the severity on the rule (defaultConfiguration.level), not on each result
-        rules = (run.get("tool") or {}).get("driver", {}).get("rules") or []
-        rule_levels = {
-            rule.get("id"): (rule.get("defaultConfiguration") or {}).get("level", "warning")
-            for rule in rules
-        }
+        levels = rule_levels(run)
 
         added_lines: dict[str, set[int]] = {}
         suggestions = []
         for result in run.get("results") or []:
-            rule_id = result.get("ruleId", "unknown")
-            location = ((result.get("locations") or [{}])[0]).get("physicalLocation") or {}
-            uri = (location.get("artifactLocation") or {}).get("uri", "")
+            location = result_location(result)
+            if location is None:
+                continue
+            uri, start, end = location
             file = files_by_path.get(sarif_path(uri, root))
             if file is None:
                 continue
 
-            region = location.get("region") or {}
-            start = region.get("startLine")
-            if not isinstance(start, int):
-                continue
-            end = region.get("endLine")
-            if not isinstance(end, int):
-                end = start
             # report only what the PR added; issues already in the file aren't this PR's doing
             if file.filename not in added_lines:
                 added_lines[file.filename] = {n for n, _ in iter_added_lines(file.patch or "")}
             if not any(n in added_lines[file.filename] for n in range(start, end + 1)):
                 continue
 
-            level = result.get("level") or rule_levels.get(rule_id, "warning")
+            rule_id = result.get("ruleId", "unknown")
+            level = result.get("level") or levels.get(rule_id, "warning")
             message = (result.get("message") or {}).get("text", "")
             suggestions.append(Suggestion(
                 filename=file.filename,
@@ -144,6 +136,7 @@ class SemgrepRunner:
                 description=f"{message} (rule: {rule_id})",
                 line=start,
                 source="security",
+                rule_id=SEMGREP_RULE,
             ))
         return suggestions
 
@@ -159,6 +152,27 @@ class SemgrepRunner:
     def _warn(self, message: str) -> None:
         log.warning("semgrep", problem=message)
         self.warnings.append(message)
+
+
+def rule_levels(run: dict) -> dict[str, str]:
+    # semgrep puts the severity on the rule (defaultConfiguration.level), not on each result
+    rules = (run.get("tool") or {}).get("driver", {}).get("rules") or []
+    return {
+        rule.get("id"): (rule.get("defaultConfiguration") or {}).get("level", "warning")
+        for rule in rules
+    }
+
+
+def result_location(result: dict) -> tuple[str, int, int] | None:
+    """(uri, first line, last line) of a SARIF result, or None if it names no line."""
+    location = ((result.get("locations") or [{}])[0]).get("physicalLocation") or {}
+    uri = (location.get("artifactLocation") or {}).get("uri", "")
+    region = location.get("region") or {}
+    start = region.get("startLine")
+    if not isinstance(start, int):
+        return None
+    end = region.get("endLine")
+    return uri, start, end if isinstance(end, int) else start
 
 
 def safe_relative_path(filename: str) -> str | None:
