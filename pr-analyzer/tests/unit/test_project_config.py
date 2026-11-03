@@ -5,6 +5,7 @@ from pr_analyzer.exceptions import ConfigError
 from pr_analyzer.project_config import (
     RULE_IDS,
     ProjectConfig,
+    config_findings,
     glob_regex,
     load_project_config,
     parse_project_config,
@@ -64,7 +65,7 @@ def test_raw_bytes_are_accepted():
     assert parse_project_config(b'disable = ["todo-comment"]').disable == {"todo-comment"}
 
 def test_every_check_has_an_id_to_disable():
-    stages = {"complexity", "file-length", "semgrep", "dependency-audit", "llm"}
+    stages = {"complexity", "file-length", "semgrep", "dependency-audit", "llm", "config"}
     assert stages | {"long-line", "magic-number", "hardcoded-password", "sql-injection"} <= RULE_IDS
     assert parse_project_config(f"disable = {sorted(RULE_IDS)}").disable == RULE_IDS
 
@@ -142,6 +143,33 @@ def test_read_names_files_that_cannot_be_parsed(raw, problem):
     config, problems = read_project_config(raw)
     assert config == ProjectConfig()
     assert [p[:len(problem)] for p in problems] == [problem]
+
+# ── a PR's own copy ───────────────────────────────────────────────────────────
+def test_pr_copy_problems_are_blocking_findings():
+    # a typo used to merge unnoticed, then stop every later run
+    [finding] = config_findings('disable = ["magic-numbers"]\n')
+
+    problem = "disable: unknown rule id 'magic-numbers' (did you mean 'magic-number'?)"
+    assert finding.title == f"Invalid config: {problem}"
+    assert (finding.filename, finding.severity, finding.rule_id) == (".pr-analyzer.toml", "HIGH", "config")
+    assert (finding.line, finding.source, finding.category) == (None, "static", "style")
+    assert problem in finding.description and "never applied" in finding.description
+
+def test_pr_copy_gets_one_finding_per_problem():
+    findings = config_findings('disabel = []\n[thresholds]\nmax_file_lines = 0')
+    assert [f.title for f in findings] == [
+        "Invalid config: unknown key 'disabel' (did you mean 'disable'?)",
+        "Invalid config: thresholds.max_file_lines must be a whole number above 0, not 0",
+    ]
+
+def test_valid_pr_copy_has_no_findings():
+    assert config_findings('disable = ["magic-number"]\nignore_paths = ["docs/**"]') == []
+
+def test_pr_copy_that_is_not_utf8_is_reported():
+    # GitHub hands a PR's files over as text, with U+FFFD for bytes that aren't UTF-8; once
+    # merged, the same file read as bytes from the base branch is rejected
+    [finding] = config_findings('# caf\ufffd\ndisable = ["llm"]')
+    assert "probably not UTF-8 text" in finding.title
 
 # ── ignore_paths ──────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("pattern, path, expected", [

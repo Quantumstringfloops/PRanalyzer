@@ -450,3 +450,85 @@ def test_pr_fixing_a_broken_base_config_can_pass():
     assert result.suggestions == []
     assert result.passed is True
     assert result.warnings[0] == TYPO_WARNING
+
+def test_pr_adding_an_invalid_config_is_blocked():
+    # it used to be analysed with the base branch's settings and pass, its typo unnoticed
+    result, _ = run_with_config("", make_pr_changing_config(TYPO))
+
+    assert [(s.filename, s.severity, s.rule_id, s.line, s.title) for s in result.suggestions] == [
+        (".pr-analyzer.toml", "HIGH", "config", None, f"Invalid config: {TYPO_PROBLEM}"),
+    ]
+    assert result.passed is False
+
+def test_pr_config_problems_are_listed_in_the_review():
+    # with no line to comment on, each one is listed in the review body
+    pipeline = AnalysisPipeline(skip_llm=True, post_review=True)
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=make_pr_changing_config(TYPO)):
+        with patch.object(pipeline.github, "post_review") as mock_post:
+            pipeline.run(URL)
+
+    _, body, comments = mock_post.call_args[0]
+    assert comments == []
+    assert f"- **HIGH** `.pr-analyzer.toml` — Invalid config: {TYPO_PROBLEM}" in body
+    assert "❌ BLOCKED" in body
+
+def test_pr_config_is_checked_but_never_applied():
+    # a valid copy that switches the password rule off doesn't, until it is merged
+    pr = make_pr_changing_config('disable = ["hardcoded-password"]', "modified", make_insecure_pr())
+
+    result, fetch = run_with_config("", pr)
+
+    assert [s.rule_id for s in result.suggestions] == ["hardcoded-password"]
+    fetch.assert_called_once_with("neil/repo", ".pr-analyzer.toml", "main")
+
+def test_ignore_marker_cannot_silence_a_config_problem():
+    # the findings have no line, so a marker in the file can't drop them
+    result, _ = run_with_config("", make_pr_changing_config(f"{TYPO}  # pr-analyzer: ignore"))
+    assert [s.rule_id for s in result.suggestions] == ["config"]
+
+def test_pr_config_is_checked_whatever_ignore_paths_says():
+    result, _ = run_with_config('ignore_paths = [".*"]', make_pr_changing_config(TYPO))
+    assert [s.rule_id for s in result.suggestions] == ["config"]
+
+def test_pr_config_check_can_be_disabled():
+    result, _ = run_with_config('disable = ["config"]', make_pr_changing_config(TYPO))
+    assert result.suggestions == []
+    assert result.passed is True
+
+def test_config_findings_stay_out_of_the_llm_prompt():
+    # their titles quote the PR's file, and the prompt's list of reported findings isn't the
+    # place for text from the PR
+    pipeline = AnalysisPipeline()
+
+    with patch.object(pipeline.github, "fetch_pr", return_value=make_pr_changing_config(TYPO)):
+        with patch.object(pipeline.llm, "analyze", return_value=[]) as mock_llm:
+            result = pipeline.run(URL)
+
+    assert mock_llm.call_args[0][1] == []
+    assert [s.rule_id for s in result.suggestions] == ["config"]
+
+def test_removed_or_nested_config_is_not_checked():
+    # only the file at the repository root is read, and a removed one has no new copy
+    pr = make_pr()
+    pr.files += [
+        FileChange(filename=".pr-analyzer.toml", status="removed", additions=0, deletions=1,
+                   patch=f"@@ -1,1 +0,0 @@\n-{TYPO}", raw_content=None),
+        FileChange(filename="sub/.pr-analyzer.toml", status="added", additions=1, deletions=0,
+                   patch=f"@@ -0,0 +1,1 @@\n+{TYPO}", raw_content=TYPO),
+    ]
+
+    result, _ = run_with_config("", pr)
+
+    assert result.suggestions == []
+    assert not any("Could not check" in w for w in result.warnings)
+
+def test_unreadable_pr_config_is_noted():
+    pr = make_pr_changing_config(TYPO)
+    pr.files[-1].raw_content = None     # GitHub didn't hand its content over
+
+    result, _ = run_with_config("", pr)
+
+    assert result.suggestions == []
+    assert ("Could not check the .pr-analyzer.toml this PR changes: its content isn't available"
+            in result.warnings)

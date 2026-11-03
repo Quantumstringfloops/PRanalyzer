@@ -15,7 +15,8 @@ Every key is optional. When a PR is analysed the file is read from the PR's base
 from the PR itself, so a PR can't loosen its own checks; `--config PATH` names a local file
 instead. A missing file means the defaults. An invalid --config file is an error that names every
 problem. An invalid file on the base branch is ignored for the defaults, with a warning, so it
-can't stop every PR, the one that fixes it included.
+can't stop every PR, the one that fixes it included; and a PR that adds or changes the file has
+its copy checked, never applied, each problem a finding (CONFIG_RULE) that blocks it.
 """
 import dataclasses
 import difflib
@@ -32,13 +33,16 @@ from pr_analyzer.analyzer import ast_analyzer
 from pr_analyzer.analyzer.ast_analyzer import Thresholds
 from pr_analyzer.exceptions import ConfigError
 from pr_analyzer.llm.engine import LLM_RULE
+from pr_analyzer.models import Suggestion
 from pr_analyzer.security import scanner
 
 CONFIG_FILE = ".pr-analyzer.toml"
+# the rule id of problems in the copy of CONFIG_FILE that a PR adds or changes
+CONFIG_RULE = "config"
 
 # lowest first, so a severity's position is its rank
 SEVERITIES = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
-RULE_IDS = frozenset(ast_analyzer.RULE_IDS + scanner.RULE_IDS + (LLM_RULE,))
+RULE_IDS = frozenset(ast_analyzer.RULE_IDS + scanner.RULE_IDS + (LLM_RULE, CONFIG_RULE))
 KEYS = ("disable", "ignore_paths", "block_on", "inline_min_severity", "thresholds")
 THRESHOLD_KEYS = tuple(f.name for f in dataclasses.fields(Thresholds))
 
@@ -137,6 +141,35 @@ def read_project_config(raw: bytes | str) -> tuple[ProjectConfig, list[str]]:
     problems: list[str] = []
     values = _validate(data, problems)
     return (ProjectConfig() if problems else ProjectConfig(**values)), problems
+
+
+def config_findings(text: str) -> list[Suggestion]:
+    """A HIGH finding for each problem in the copy of CONFIG_FILE that a PR adds or changes. The
+    copy is only checked, never applied; once merged, an invalid file is ignored on every PR until
+    it is fixed, so its problems block the PR that brings them in."""
+    _, problems = read_project_config(text)
+    if "\ufffd" in text:
+        # a PR's files arrive as text, with U+FFFD where the bytes weren't UTF-8; read as bytes
+        # from the base branch once merged, such a file is rejected outright
+        problems.insert(0, "the file has U+FFFD replacement characters, so it is probably not "
+                           "UTF-8 text")
+    return [
+        Suggestion(
+            filename=CONFIG_FILE,
+            severity="HIGH",
+            category="style",
+            title=f"Invalid config: {problem}",
+            description=(
+                f"This PR's {CONFIG_FILE} is invalid: {problem}. A PR's copy of the file is only "
+                "checked, never applied. Once merged, an invalid file is ignored, and every PR is "
+                "analysed with the default settings until it is fixed."
+            ),
+            line=None,
+            source="static",
+            rule_id=CONFIG_RULE,
+        )
+        for problem in problems
+    ]
 
 
 def _validate(data: dict[str, Any], problems: list[str]) -> dict[str, Any]:
