@@ -32,7 +32,7 @@ Permission to rewrite modules and the added scalability requirements don't chang
 
 - 2026-11-02/03: Full codebase analysis. 137 findings were confirmed across 9 areas of the code.
 - 2026-11-03: Gate check: **not viable** (recorded above). No production code, payments, auth or pushes.
-- 2026-11-03: **Free-CLI track, approved by the user, is complete** on the local branch `fix/working-cli`, in 11 commits from `39f72d2` to `1f8877e`. Nothing has been pushed.
+- 2026-11-03: **Free-CLI track, approved by the user, is complete** on the branch `fix/working-cli`, in 11 commits from `39f72d2` to `1f8877e`.
   - **Dependencies:** Typer is upgraded to 0.27 (the CLI couldn't parse its flags), the lock file is regenerated, and the semgrep/pip-audit/openai/anthropic extras are set up.
   - **Config, logging and errors:** unknown `.env` keys are ignored, logs go to stderr, and the error types are clearer.
   - **GitHub client:** long diffs, files over 1 MB and errors no longer crash it, and review posting works.
@@ -47,12 +47,16 @@ Permission to rewrite modules and the added scalability requirements don't chang
   - In a fresh environment built from the lock: `poetry check --lock` passes, ruff and mypy are clean, and 199 tests pass (53 tests existed before, 36 of them failing).
   - With core dependencies only: 195 pass and 4 skip (OpenAI/Anthropic SDKs absent).
   - Real unauthenticated runs on pallets/flask PRs #6162 and #6176 worked. Semgrep and Ollama warnings degraded gracefully, the JSON output was clean, and the line numbers matched the real file. Missing-PR and bad-URL runs exit 2.
+- 2026-11-03: **Branch pushed** to origin after the user chose to create the pull request. The pull request is not open yet.
+  - Opening it runs the PR Analysis workflow for the first time. Running the analyzer's static and security stages on the branch's own diff predicts **44.0, F, blocked, with 237 inline review comments**.
+  - 164 of those comments are "Function missing return type hint" on test functions.
+  - All 6 CRITICAL and 11 HIGH findings are deliberate fake secrets and unsafe-code samples in the scanner's own tests.
 
 ## Work Remaining
 
 - **Production build:** none. The gate stopped it.
 - **Free-CLI track:**
-  - push `fix/working-cli` and open a pull request (waiting for the user's approval; the repo is public);
+  - open the pull request (the branch is pushed; see Next Step);
   - publish to PyPI or as a GitHub Action;
   - optionally purge the leaked `.env` from git history (a force-push to a public repo; only after the keys are rotated, and only with explicit approval).
 - **User actions:**
@@ -61,4 +65,9 @@ Permission to rewrite modules and the added scalability requirements don't chang
 
 ## Next Step
 
-**Do not start or resume a production build from this file.** The gate failed. Wait for the user to approve pushing `fix/working-cli` and opening a pull request. Until then nothing is pushed. If the user changes the preconditions above and explicitly asks, re-run the gate.
+**Do not start or resume a production build from this file.** The gate failed. `fix/working-cli` is pushed, but the pull request is not open. Wait for the user to choose between two options:
+
+- quiet the PR bot first: skip the return-type rule in test files, post inline comments only for MEDIUM and above, and add an inline marker that suppresses deliberate test fixtures;
+- open the pull request as it is.
+
+Then open it, bind it, and record the link here. If the user changes the preconditions above and explicitly asks, re-run the gate.
