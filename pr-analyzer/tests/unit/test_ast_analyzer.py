@@ -216,6 +216,7 @@ def test_todo_counts_only_in_comments():
     ("if sys.version_info >= (3, 11):", "app.py"),         # a version check names its numbers
     ('log.info("retried 25 times")', "app.py"),           # numbers in strings and comments
     ("retry()  # at most 25 times", "app.py"),
+    ('label = f"{name:>25}"', "app.py"),                  # and in a format spec
 ])
 def test_explained_numbers_are_not_magic(line, filename):
     assert "magic-number" not in rules_for(line, filename)
@@ -227,6 +228,7 @@ def test_explained_numbers_are_not_magic(line, filename):
     "sizes = [25, 50]",      # a list literal isn't an index
     "if count == 25:",       # a comparison doesn't name its number
     "total += 25",
+    'msg = f"{total * 25} left"',   # the code in an f-string's field is code
 ])
 def test_unexplained_numbers_are_still_flagged(line):
     assert "magic-number" in rules_for(line)

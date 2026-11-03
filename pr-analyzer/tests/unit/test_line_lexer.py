@@ -7,8 +7,8 @@ def blanks(n: int) -> str:
 
 # ── Python ────────────────────────────────────────────────────────────────────
 def test_python_string_contents_are_blanked_but_quotes_kept():
-    parts = split_line('x = f"SELECT {id}" + y', ".py")
-    assert parts.code == f'x = f"{blanks(11)}" + y'
+    parts = split_line('x = b"SELECT id" + y', ".py")
+    assert parts.code == f'x = b"{blanks(9)}" + y'
     assert parts.comments.strip() == ""
 
 def test_python_comment_is_split_off():
@@ -31,16 +31,52 @@ def test_unclosed_string_runs_to_the_end_of_the_line():
     # the first line of a multi-line string: the rest of the line is text
     assert split_line('q = """SELECT eval(x)', ".py").code == f'q = """{blanks(14)}'   # pr-analyzer: ignore
 
-def test_views_keep_the_line_length():
-    line = 'a = "b"  # c'
-    parts = split_line(line, ".py")
+@pytest.mark.parametrize("line, extension", [
+    ('a = "b"  # c', ".py"), ('f"{a:{b}} {c!r}"  # d', ".py"), ("`a ${b}` // c", ".js"),
+])
+def test_views_keep_the_line_length(line, extension):
+    parts = split_line(line, extension)
     assert len(parts.code) == len(parts.comments) == len(line)
+
+# ── f-strings and template literals ───────────────────────────────────────────
+@pytest.mark.parametrize("line, code", [
+    # the text is blanked and the code in a field kept: it used to be blanked with the string
+    ('x = f"SELECT {id}" + y', 'x = f"' + blanks(7) + '{id}" + y'),
+    ('otp = f"{random.randint(0, 999999)}"', 'otp = f"{random.randint(0, 999999)}"'),  # pr-analyzer: ignore
+    # a format spec is text, apart from a field nested in it
+    ('f"{n:>8} {x:.{prec}f}"', 'f"{n' + blanks(3) + "} {x" + blanks(2) + "{prec}" + blanks(1) + '}"'),
+    ('f"{{x}} {y}"', 'f"' + blanks(6) + '{y}"'),          # {{ and }} are braces, not fields
+    ('f"{d["key"]}"', 'f"{d["' + blanks(3) + '"]}"'),      # a string in a field is still a string
+    ('f"{ {1: a}[b[1:2]] }"', 'f"{ {1: a}[b[1:2]] }"'),    # brackets don't end a field
+    # a backslash doesn't escape a brace, and \N{...} names a character unless the string is raw
+    (r'rf"\{x}" + f"\N{BULLET} {y}"', 'rf" {x}" + f"' + blanks(11) + '{y}"'),
+    ('f"""a "b" {c}"""', 'f"""' + blanks(6) + '{c}"""'),
+    ('t"<p>{name}</p>"', 't"' + blanks(3) + "{name}" + blanks(4) + '"'),   # a t-string
+    ('if"{x}": pass', 'if"   ": pass'),                   # `if` is no f prefix
+])
+def test_fstring_fields_are_code(line, code):
+    assert split_line(line, ".py").code == code
+
+@pytest.mark.parametrize("line, code", [
+    ("const s = `call ${a}`;", "const s = `" + blanks(5) + "${a}`;"),
+    ("`a ${b ? `c${d}` : 'e'} f`", "`  ${b ? ` ${d}` : ' '}  `"),   # templates nest
+    ("`\\${a} $b ${ {c: 1}.c }`", "`" + blanks(9) + "${ {c: 1}.c }`"),
+])
+def test_template_literal_fields_are_code(line, code):
+    assert split_line(line, ".ts").code == code
+
+def test_a_comment_inside_a_field_is_a_comment():
+    parts = split_line("`${/* why */ x}`", ".js")
+    assert (parts.code.strip(), parts.comments.strip()) == ("`${" + blanks(9) + " x}`", "/* why */")
+
+@pytest.mark.parametrize("line, extension", [('f"{' * 1000 + "x", ".py"), ("`${" * 1000, ".js")])
+def test_deeply_nested_fields_do_not_exhaust_the_stack(line, extension):
+    assert len(split_line(line, extension).code) == len(line)
 
 # ── JavaScript / TypeScript ───────────────────────────────────────────────────
 @pytest.mark.parametrize("line, code, comments", [
     ("foo();  // console.log(x)", "foo();", "// console.log(x)"),
     ("/* eval(x) */ run()", blanks(14) + "run()", "/* eval(x) */"),   # pr-analyzer: ignore
-    ("const s = `call ${a}`;", f"const s = `{blanks(9)}`;", ""),
     ("const t = 'it\\'s';", f"const t = '{blanks(5)}';", ""),
     ('const url = "http://x"; // home', f'const url = "{blanks(8)}";', "// home"),
 ])

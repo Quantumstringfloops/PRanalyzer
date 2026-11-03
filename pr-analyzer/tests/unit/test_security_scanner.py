@@ -174,6 +174,22 @@ def test_js_comment_after_code_is_not_flagged():
 def test_a_call_after_a_string_is_still_flagged():
     assert titles(make_file(added('x = "a"; eval(y)'))) == ["eval() usage detected"]  # pr-analyzer: ignore
 
+@pytest.mark.parametrize("code, filename, rule", [
+    ('otp = f"{random.randint(0, 999999):06d}"', "auth.py", "insecure-random"),  # pr-analyzer: ignore
+    ('print(f"= {eval(expr)}")', "calc.py", "eval"),  # pr-analyzer: ignore
+    ('log.info(f"{pickle.loads(blob)!r}")', "cache.py", "pickle-load"),  # pr-analyzer: ignore
+    ('data = f"{yaml.load(raw)}"', "cfg.py", "yaml-load"),  # pr-analyzer: ignore
+    ('msg = f"{subprocess.run(cmd, shell=True).stdout}"', "run.py", "subprocess-shell"),  # pr-analyzer: ignore
+    ("const out = `${eval(expr)}`;", "view.ts", "eval"),  # pr-analyzer: ignore
+])
+def test_calls_in_fstring_and_template_fields_are_flagged(code, filename, rule):
+    # the code in {...} and ${...} used to be blanked with the rest of the string
+    file = make_file(added(code), filename=filename)
+    assert rule in [s.rule_id for s in scanner.scan([file])]
+
+def test_calls_in_the_text_of_an_fstring_are_not_flagged():
+    assert scanner.scan([make_file(added('hint = f"never eval({name}) twice"'))]) == []  # pr-analyzer: ignore
+
 def test_secrets_are_still_found_in_comments():
     file = make_file(added('x = 1  # password = "hunter22"'))  # pr-analyzer: ignore
     assert titles(file) == ["Hardcoded password"]
