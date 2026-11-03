@@ -345,6 +345,9 @@ class GithubClient:
             try:
                 review.edit(summary)
                 return True
+            except RateLimitExceededException:
+                # a 403 too, but not "someone else's review": posting a new one would duplicate it
+                raise
             except GithubException as e:
                 if e.status not in (403, 404):
                     raise

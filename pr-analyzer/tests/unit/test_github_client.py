@@ -520,3 +520,16 @@ def test_summary_from_another_account_is_left_alone(github):
     GithubClient(token="t").post_review(make_pr_summary(), "mine", [])
 
     assert github.pr.create_review.call_args.kwargs["body"] == f"mine\n\n{MARKER}"
+
+def test_rate_limit_on_our_summary_is_not_taken_for_another_accounts_review(github):
+    # a secondary limit comes as a 403 too: it used to post a second summary review, the
+    # duplicate the tag is there to prevent
+    ours = MagicMock(body=f"old\n\n{MARKER}")
+    ours.edit.side_effect = RateLimitExceededException(
+        403, {"message": "You have exceeded a secondary rate limit."}, {"Retry-After": "300"})
+    github.pr.get_reviews.return_value = [ours]
+
+    with pytest.raises(RateLimitError):
+        GithubClient(token="t").post_review(make_pr_summary(), "new", [(finding(), 3)])
+
+    github.pr.create_review.assert_not_called()
