@@ -6,6 +6,7 @@ import structlog
 
 from pr_analyzer.analyzer.ast_analyzer import StaticAnalyzer
 from pr_analyzer.analyzer.scorer import Scorer
+from pr_analyzer.cache import open_cache
 from pr_analyzer.config import settings
 from pr_analyzer.diff import commentable_lines
 from pr_analyzer.exceptions import PRAnalyzerError
@@ -77,11 +78,15 @@ def low_severity_counts(findings: list[Suggestion], min_severity: str = "MEDIUM"
 
 
 class AnalysisPipeline:
-    def __init__(self, skip_llm: bool = False, post_review: bool = False):
-        self.github   = GithubClient()
+    def __init__(
+        self, skip_llm: bool = False, post_review: bool = False, use_cache: bool = True
+    ) -> None:
+        # file contents and LLM replies; --no-cache (use_cache=False) neither reads nor writes it
+        self.cache    = open_cache(enabled=use_cache)
+        self.github   = GithubClient(cache=self.cache)
         self.static   = StaticAnalyzer()
         self.security = SecurityScanner()
-        self.llm      = LLMEngine()
+        self.llm      = LLMEngine(cache=self.cache)
         self.scorer   = Scorer()
         self.skip_llm = skip_llm
         self.post_review = post_review
@@ -90,6 +95,7 @@ class AnalysisPipeline:
 
     def close(self) -> None:
         self.github.close()
+        self.cache.close()
 
     def run(self, url: str, skip_llm: bool | None = None) -> AnalysisResult:
         # the constructor's flag applies unless a caller overrides it for this run; run() used
@@ -129,6 +135,7 @@ class AnalysisPipeline:
             try:
                 llm_suggestions = self.llm.analyze(reviewed, existing_findings)
                 llm_provider_used = settings.llm_provider
+                warnings.extend(self.llm.warnings)   # e.g. files left out over LLM_TOKEN_BUDGET
             except Exception as e:  # the LLM review is optional; keep the deterministic results
                 log.warning("llm_failed", error=str(e))
                 warnings.append(f"LLM review skipped: {e}")

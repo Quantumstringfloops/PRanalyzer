@@ -1,3 +1,4 @@
+import threading
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -6,6 +7,8 @@ import pytest
 import requests
 from github import GithubException, RateLimitExceededException, UnknownObjectException
 
+from pr_analyzer.cache import DiskCache
+from pr_analyzer.config import settings
 from pr_analyzer.exceptions import (
     InvalidPRURLError,
     InvalidTokenError,
@@ -21,12 +24,13 @@ from pr_analyzer.models import PRSummary, Suggestion
 URL = "https://github.com/microsoft/vscode/pull/1"
 
 
-def make_file(filename="app.py", status="modified", patch="@@ -1,1 +1,1 @@\n+x = 1"):
-    return SimpleNamespace(filename=filename, status=status, additions=1, deletions=0, patch=patch)
+def make_file(filename="app.py", status="modified", patch="@@ -1,1 +1,1 @@\n+x = 1", sha=None):
+    return SimpleNamespace(filename=filename, status=status, additions=1, deletions=0, patch=patch,
+                           sha=sha)
 
 
-def make_content(text="x = 1\n", encoding="base64"):
-    return SimpleNamespace(encoding=encoding, decoded_content=text.encode())
+def make_content(text="x = 1\n", encoding="base64", sha=None):
+    return SimpleNamespace(encoding=encoding, decoded_content=text.encode(), sha=sha)
 
 
 @pytest.fixture
@@ -211,6 +215,157 @@ def test_no_token_uses_unauthenticated_client():
     with patch("pr_analyzer.github.client.Github") as mock_github:
         GithubClient(token="")
     assert mock_github.call_args.kwargs["auth"] is None
+
+# ── fetching contents in parallel ─────────────────────────────────────────────
+class FakeRepo:
+    def __init__(self, owner, contents):
+        self.full_name = "microsoft/vscode"
+        self.owner = owner
+        self.contents = contents
+        self.threads = set()
+
+    def get_contents(self, path, ref):
+        self.threads.add(threading.get_ident())
+        self.owner.requests.append((path, ref))
+        result = self.contents[path]
+        if isinstance(result, BaseException):
+            raise result
+        if isinstance(result, threading.Barrier):
+            result.wait()   # returns once another worker is fetching at the same time
+            return make_content(f"{path}\n")
+        return make_content(result, sha=self.owner.served_blobs.get(path))
+
+
+@pytest.fixture
+def fake_github(monkeypatch):
+    """Github clients whose repos record which thread used them."""
+    state = SimpleNamespace(clients=[], requests=[], contents={}, files=[], served_blobs={})
+    pr = MagicMock(number=1, title="t", additions=1, deletions=0, draft=False)
+    pr.user.login = "neil"
+    pr.head.sha = "abc123"
+    pr.get_files.side_effect = lambda: state.files
+    state.pr = pr
+
+    class FakeGithub:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.closed = False
+            self.repo = FakeRepo(state, state.contents)
+            self.repo.get_pull = lambda number: pr
+            state.clients.append(self)
+
+        def get_repo(self, name):
+            return self.repo
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr("pr_analyzer.github.client.Github", FakeGithub)
+
+    def add(name, result="x = 1\n", status="modified", blob=None):
+        state.files.append(make_file(filename=name, status=status, sha=blob))
+        state.contents[name] = result
+        state.served_blobs[name] = blob   # the blob SHA the contents API answers with
+
+    state.add = add
+    return state
+
+def test_contents_are_fetched_at_the_same_time_and_kept_in_order(fake_github):
+    both = threading.Barrier(2, timeout=5)   # fails if the two fetches don't overlap
+    fake_github.add("a.py", both)
+    fake_github.add("b.py", both)
+    for name in ("c.py", "d.py", "e.py"):
+        fake_github.add(name, f"{name}\n")
+
+    pr = GithubClient(token="t").fetch_pr(URL)
+
+    assert [f.filename for f in pr.files] == ["a.py", "b.py", "c.py", "d.py", "e.py"]
+    assert [f.raw_content for f in pr.files] == [f"{f.filename}\n" for f in pr.files]
+
+def test_each_worker_thread_has_its_own_client(fake_github):
+    for i in range(6):
+        fake_github.add(f"f{i}.py")
+
+    GithubClient(token="t").fetch_pr(URL)
+
+    main, *workers = fake_github.clients
+    assert workers and main.repo.threads == set()          # the main client stays on its thread
+    assert all(len(w.repo.threads) == 1 for w in workers)  # no client is shared between threads
+    assert all(w.closed and w.kwargs["lazy"] for w in workers)
+
+def test_one_worker_fetches_in_turn_on_the_main_client(fake_github, monkeypatch):
+    monkeypatch.setattr(settings, "github_max_workers", 1)
+    for name in ("a.py", "b.py"):
+        fake_github.add(name)
+
+    GithubClient(token="t").fetch_pr(URL)
+
+    [main] = fake_github.clients
+    assert main.repo.threads == {threading.get_ident()}
+
+def test_failed_fetch_leaves_that_file_without_content(fake_github):
+    fake_github.add("a.py")
+    fake_github.add("gone.py", UnknownObjectException(404, {"message": "Not Found"}, {}))
+    fake_github.add("c.py")
+    fake_github.add("old.py", status="removed")
+
+    pr = GithubClient(token="t").fetch_pr(URL)
+
+    assert [f.raw_content for f in pr.files] == ["x = 1\n", None, "x = 1\n", None]
+    assert ("old.py", "abc123") not in fake_github.requests
+
+def test_rate_limit_in_a_worker_fails_the_fetch(fake_github):
+    fake_github.add("a.py")
+    fake_github.add("b.py", RateLimitExceededException(
+        403, {"message": "API rate limit exceeded"}, {"X-RateLimit-Reset": "1767225600"}))
+
+    with pytest.raises(RateLimitError):
+        GithubClient(token="t").fetch_pr(URL)
+    assert all(c.closed for c in fake_github.clients[1:])
+
+# ── content cache ─────────────────────────────────────────────────────────────
+def test_cached_contents_are_not_fetched_again(fake_github, tmp_path):
+    for name in ("a.py", "b.py", "c.py"):
+        fake_github.add(name, f"{name}\n")
+
+    first = GithubClient(token="t", cache=DiskCache(tmp_path)).fetch_pr(URL)
+    fetched = len(fake_github.requests)
+    second = GithubClient(token="t", cache=DiskCache(tmp_path)).fetch_pr(URL)
+
+    assert fetched == 3 and len(fake_github.requests) == 3
+    assert [f.raw_content for f in second.files] == [f.raw_content for f in first.files]
+
+def test_unchanged_file_is_not_fetched_again_after_a_push(fake_github, tmp_path):
+    # a push makes a new head commit, but a file that didn't change keeps its blob SHA
+    fake_github.add("same.py", blob="b" * 40)
+    fake_github.add("edited.py")
+    GithubClient(token="t", cache=DiskCache(tmp_path)).fetch_pr(URL)
+    fake_github.requests.clear()
+    fake_github.contents["edited.py"] = "x = 2\n"
+
+    fake_github.pr.head.sha = "def456"   # the PR's new head commit
+    pr = GithubClient(token="t", cache=DiskCache(tmp_path)).fetch_pr(URL)
+
+    assert fake_github.requests == [("edited.py", "def456")]
+    assert [f.raw_content for f in pr.files] == ["x = 1\n", "x = 2\n"]
+
+def test_text_of_another_commit_is_not_stored_as_the_blob(fake_github, tmp_path):
+    # the PR moved on between listing its files and fetching them: the text isn't that blob's
+    fake_github.add("a.py", blob="b" * 40)
+    fake_github.served_blobs["a.py"] = "c" * 40
+
+    GithubClient(token="t", cache=DiskCache(tmp_path)).fetch_pr(URL)
+    GithubClient(token="t", cache=DiskCache(tmp_path)).fetch_pr(URL)
+
+    assert len(fake_github.requests) == 2
+
+def test_unavailable_contents_are_not_cached(fake_github, tmp_path):
+    fake_github.add("gone.py", UnknownObjectException(404, {"message": "Not Found"}, {}))
+
+    GithubClient(token="t", cache=DiskCache(tmp_path)).fetch_pr(URL)
+    GithubClient(token="t", cache=DiskCache(tmp_path)).fetch_pr(URL)
+
+    assert len(fake_github.requests) == 2
 
 # ── post_review ───────────────────────────────────────────────────────────────
 def make_pr_summary():

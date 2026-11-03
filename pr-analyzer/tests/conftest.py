@@ -1,6 +1,7 @@
 import pytest
 import structlog
 
+from pr_analyzer.config import settings
 from pr_analyzer.security import tools
 
 
@@ -17,3 +18,9 @@ def reset_logging():
     # later tests don't log into a stream that no longer exists
     yield
     structlog.reset_defaults()
+
+
+@pytest.fixture(autouse=True)
+def isolated_cache(tmp_path, monkeypatch):
+    # tests must never read or write the real cache in ~/.cache, nor share entries between tests
+    monkeypatch.setattr(settings, "cache_dir", str(tmp_path / "pr-analyzer-cache"))

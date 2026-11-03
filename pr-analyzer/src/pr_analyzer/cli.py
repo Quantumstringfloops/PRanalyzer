@@ -18,6 +18,7 @@ from pr_analyzer.exceptions import (
     PRAnalyzerError,
 )
 from pr_analyzer.logging_config import setup_logging
+from pr_analyzer.models import AnalysisResult
 from pr_analyzer.pipeline import AnalysisPipeline
 from pr_analyzer.project_config import load_project_config
 from pr_analyzer.reporting.rich_reporter import RichReporter
@@ -87,6 +88,16 @@ def error_messages(e: PRAnalyzerError) -> tuple[str, ...]:
     return (f"Analysis failed: {e}",)
 
 
+def print_report(result: AnalysisResult, output: OutputFormat) -> None:
+    # rich is the default, json and markdown are for CI and sharing
+    if output is OutputFormat.json:
+        reporter.print_json_report(result)
+    elif output is OutputFormat.markdown:
+        reporter.print_markdown_report(result)
+    else:
+        reporter.print_rich_report(result)
+
+
 @app.command()
 def analyze(
     pr_url: Annotated[str, typer.Argument(help="Full GitHub PR URL")],
@@ -98,6 +109,7 @@ def analyze(
         "--config", help="Settings file to use instead of .pr-analyzer.toml on the PR's base branch",
     )] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show progress logs (on stderr)")] = False,
+    no_cache: Annotated[bool, typer.Option("--no-cache", help="Don't read or write the on-disk cache")] = False,
 ):
     """
     Analyze a GitHub pull request for code quality issues.
@@ -119,7 +131,7 @@ def analyze(
         # pipeline reads .pr-analyzer.toml from the PR's base branch, never from the current
         # directory: in CI that is the PR's own checkout, which could loosen its own checks.
         project_config = load_project_config(config) if config is not None else None
-        pipeline = AnalysisPipeline(skip_llm=skip_llm, post_review=post_review)
+        pipeline = AnalysisPipeline(skip_llm=skip_llm, post_review=post_review, use_cache=not no_cache)
         if project_config is not None:
             pipeline.project_config = project_config
         result = pipeline.run(pr_url)
@@ -138,13 +150,7 @@ def analyze(
             pipeline.close()
 
     # hand off to the correct reporter — cli.py never prints anything itself
-    # rich is the default, json and markdown are for CI and sharing
-    if output is OutputFormat.json:
-        reporter.print_json_report(result)
-    elif output is OutputFormat.markdown:
-        reporter.print_markdown_report(result)
-    else:
-        reporter.print_rich_report(result)
+    print_report(result, output)
 
     # exit code is the only thing cli.py "returns" to the terminal
     # code 1 means blocked — CI systems use this to fail the pipeline

@@ -20,7 +20,7 @@ Code review is slow, inconsistent, and easy to skip under deadline pressure. Jun
                        ▼
               ┌─────────────────┐
               │  GitHub Client  │  fetches PR metadata, each file's diff, and its full content
-              └────────┬────────┘
+              └────────┬────────┘  (8 files at a time, from the on-disk cache where it can)
                        │
                        ▼
               ┌─────────────────┐
@@ -34,8 +34,8 @@ Code review is slow, inconsistent, and easy to skip under deadline pressure. Jun
                        │
                        ▼
               ┌─────────────────┐
-              │   LLM Engine    │  sends the line-numbered diff to Ollama / OpenAI / Anthropic;
-              └────────┬────────┘  receives JSON suggestions back
+              │   LLM Engine    │  sends the line-numbered diff to Ollama / OpenAI / Anthropic
+              └────────┬────────┘  (a big one in parts); receives JSON suggestions back
                        │
                        ▼
               ┌─────────────────┐
@@ -117,6 +117,7 @@ pr-analyzer version
 | `--output`, `-o` | `rich` | `rich`, `json` or `markdown`. Reports go to stdout, logs to stderr |
 | `--config PATH` | — | Project settings to use instead of the `.pr-analyzer.toml` on the PR's base branch (see [Project configuration](#project-configuration-pr-analyzertoml)) |
 | `--verbose`, `-v` | off | Show progress logs |
+| `--no-cache` | off | Don't read or write the [on-disk cache](#caching) for this run |
 
 URLs copied from a PR's *Files changed*, *Commits* or *Checks* tab work too.
 
@@ -321,12 +322,53 @@ Settings come from environment variables or a `.env` file in the directory you r
 | `LLM_CONFIDENCE_THRESHOLD` | ❌ | `0.5` | Drop LLM suggestions below this confidence |
 | `LLM_TIMEOUT_SECONDS` | ❌ | `120` | Time limit for one LLM request |
 | `LLM_MAX_TOKENS` | ❌ | `4096` | Response length limit (Anthropic) |
-| `MAX_DIFF_LINES` | ❌ | `3000` | Diff lines sent to the LLM; the rest is left out of the prompt |
+| `MAX_DIFF_LINES` | ❌ | `3000` | Diff lines per LLM request; a bigger diff is [reviewed in parts](#big-pull-requests) |
+| `LLM_TOKEN_BUDGET` | ❌ | `200000` | Estimated prompt tokens (characters ÷ 4) one run may send; files past it aren't AI-reviewed, and the report says how many. `0` = no limit |
+| `LLM_MAX_CONCURRENCY` | ❌ | `1` | LLM requests in flight at once when a PR is reviewed in parts |
 | `SEMGREP_CONFIG` | ❌ | `p/owasp-top-ten` | Semgrep ruleset: registry name, URL or local path |
 | `SEMGREP_TIMEOUT_SECONDS` | ❌ | `300` | Time limit for the Semgrep run |
 | `PIP_AUDIT_TIMEOUT_SECONDS` | ❌ | `300` | Time limit for pip-audit |
 | `GITHUB_TIMEOUT_SECONDS` | ❌ | `30` | Time limit for each GitHub API request |
+| `GITHUB_MAX_WORKERS` | ❌ | `8` | Files whose content is fetched at the same time |
+| `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS` | ❌ | `60` | Longest wait for a GitHub rate limit to reset; a longer one fails the run (exit code 2). `0` = never wait |
+| `CACHE_ENABLED` | ❌ | `true` | `false` turns the [on-disk cache](#caching) off |
+| `CACHE_DIR` | ❌ | `$XDG_CACHE_HOME/pr-analyzer`, else `~/.cache/pr-analyzer` | Where the cache lives |
+| `CACHE_MAX_SIZE_MB` | ❌ | `500` | Beyond this, the least recently used entries are removed |
+| `CACHE_MAX_AGE_DAYS` | ❌ | `30` | Entries unused for this long are removed |
 | `LOG_LEVEL` | ❌ | `WARNING` | `DEBUG` / `INFO` / `WARNING` / `ERROR` (`--verbose` sets `INFO`) |
+
+---
+
+## Big Pull Requests
+
+**Fetching.** The full content of `GITHUB_MAX_WORKERS` files is fetched at a time, each worker thread with a GitHub client of its own. With 100 ms per request, a 50-file PR took 19.2 s before and takes 3.1 s now (`benchmarks/fetch_benchmark.py`).
+
+**Rate limits.** When GitHub answers with a rate limit (403 or 429), the request is sent again once the limit allows: after `Retry-After` seconds, at `X-RateLimit-Reset` for the hourly limit, or after a minute when GitHub doesn't say. Waits are logged, and the other requests hold back meanwhile. A wait longer than `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS` isn't sat out: the run stops with exit code 2 and says when to try again.
+
+**LLM review in parts.** A diff of up to `MAX_DIFF_LINES` lines is reviewed in one request, as before. A bigger one is split into parts of whole files (a file too big for one part is cut between hunks, or between lines, keeping its line numbers), each reviewed in its own request, and the suggestions are merged. `LLM_TOKEN_BUDGET` caps what one run sends: once the next part would go over it, the remaining parts are skipped and a warning says how many files weren't AI-reviewed. If a request fails, the parts already reviewed are kept and the warning says what was left out. Parts are sent one at a time by default, because Ollama may queue parallel requests (see its `OLLAMA_NUM_PARALLEL`) and time spent in its queue counts towards `LLM_TIMEOUT_SECONDS`; for OpenAI and Anthropic, `LLM_MAX_CONCURRENCY=2` to `4` reviews a big PR faster.
+
+### Caching
+
+Results that can't change are kept on disk, in `CACHE_DIR`:
+
+- **file contents**, by git blob SHA: a file that didn't change keeps its blob SHA from push to push, so a new push fetches only the files it changed;
+- **LLM replies**, by provider, model and the exact prompt: re-running the same diff costs no tokens and doesn't count towards `LLM_TOKEN_BUDGET`.
+
+Failed requests are never cached, and neither is anything that contains your API keys or looks like a token or private key. A damaged entry counts as a miss, entries are written atomically, and the size and age limits are applied at most once an hour. The directory is private to your user, since it may hold code from private repositories. `--no-cache` skips the cache for one run (for a fresh LLM review, say); `CACHE_ENABLED=false` turns it off.
+
+To keep the cache between GitHub Actions runs, restore and save it with `actions/cache`. A saved cache can't be updated, so each run saves a new one and the next run restores the newest:
+
+```yaml
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pr-analyzer
+          key: pr-analyzer-${{ runner.os }}-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          restore-keys: |
+            pr-analyzer-${{ runner.os }}-${{ github.event.pull_request.number }}-
+            pr-analyzer-${{ runner.os }}-
+```
+
+GitHub scopes caches by branch, so a PR's runs restore what earlier runs of the same PR saved (or the default branch's), never another PR's.
 
 ---
 
@@ -392,7 +434,10 @@ Activate the virtualenv you installed `pranalyzer` into, or use `pipx install pr
 Install the package (`pip install pranalyzer`), or from a source checkout run `poetry install` in the `pr-analyzer/` directory (the one with `pyproject.toml`).
 
 **`Authentication failed` or `GitHub rate limit hit`**
-Set `GITHUB_TOKEN`. The `.env` file must be in the directory you run the command from, or export the variable in your shell.
+Set `GITHUB_TOKEN`. The `.env` file must be in the directory you run the command from, or export the variable in your shell. A rate limit that resets within `GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS` is waited out; the message means it resets later than that.
+
+**Warning: `… file(s) were not AI-reviewed, or only in part`**
+The PR was reviewed in parts and some were left out: either `LLM_TOKEN_BUDGET` ran out (raise it, or set `0` for no limit) or an LLM request failed (the warning names the error). The other checks covered every file.
 
 **Warning: `Semgrep scan skipped` / `Dependency audit skipped`**
 The scanners are optional. Install them with `pip install "pranalyzer[security]"` (from source: `poetry install --extras "security"`).
@@ -412,7 +457,8 @@ Only MEDIUM, HIGH and CRITICAL findings get inline comments (or the severities f
 - **No support for monorepos** — if a PR touches files across multiple packages the scorer treats them as one codebase.
 - **Complexity covers Python, JavaScript and TypeScript only** — other languages get the regex checks but no complexity score.
 - **Dependency audit checks exact pins only** — `name==version` lines added to `requirements*.txt`; ranges, `pyproject.toml` and lock files are not audited.
-- **Semgrep's default ruleset is downloaded** from the Semgrep registry, so it needs network access (point `SEMGREP_CONFIG` at a local file to avoid that).
+- **Semgrep's default ruleset is downloaded** from the Semgrep registry on every run, so it needs network access (point `SEMGREP_CONFIG` at a local file to avoid that).
+- **Big PRs are reviewed in parts** — the LLM sees one part of the diff at a time, so it can miss a problem that only shows across files in different parts.
 - **Fork PRs cannot post reviews** — GitHub blocks write tokens on PRs from forks by default.
 - **Ignore markers are the PR author's call** — anyone can add `pr-analyzer: ignore` to a line. The report names every ignored line, so check them during review.
 - **Line rules read one line at a time** — text in the middle of a multi-line docstring or comment can still trigger a code rule (see [What the line rules skip](#what-the-line-rules-skip)).

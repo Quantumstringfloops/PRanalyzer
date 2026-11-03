@@ -1,3 +1,5 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -7,8 +9,8 @@ from github import Auth, Github, GithubException, RateLimitExceededException
 from github.Commit import Commit
 from github.GithubObject import NotSet, Opt
 from github.PullRequest import PullRequest, ReviewComment
-from urllib3.util.retry import Retry
 
+from pr_analyzer.cache import DiskCache
 from pr_analyzer.config import settings
 from pr_analyzer.exceptions import (
     InvalidPRURLError,
@@ -20,6 +22,7 @@ from pr_analyzer.exceptions import (
     RepositoryNotFoundError,
 )
 from pr_analyzer.github.markdown import neutralise, neutralise_line
+from pr_analyzer.github.ratelimit import RateLimitPause, github_retry
 from pr_analyzer.models import FileChange, PRSummary, Suggestion
 
 log = structlog.get_logger(__name__)
@@ -29,22 +32,35 @@ GITHUB_HOSTS = {"github.com", "www.github.com"}
 PR_SUBPAGES = {"files", "commits", "checks"}
 # hidden tag on the summary review, so a later run can find and update it
 REVIEW_MARKER = "<!-- pr-analyzer -->"
+# GitHub's maximum page size: a PR with 300 files is listed in 3 requests instead of 10
+PER_PAGE = 100
 
 
 class GithubClient:
 
-    def __init__(self, token: str | None = None):
+    def __init__(
+        self,
+        token: str | None = None,
+        cache: DiskCache | None = None,
+        rate_limits: RateLimitPause | None = None,
+    ):
         self.token = settings.github_token if token is None else token
-        # retry transient 5xx errors on reads; rate-limit 403s are not retried but surface as
-        # RateLimitError, so the user learns when to try again instead of the CLI sleeping for it
-        retry = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=(500, 502, 503, 504),
-            raise_on_status=False,
+        self.cache = cache if cache is not None else DiskCache.disabled()
+        self.max_workers = settings.github_max_workers
+        # retry transient 5xx errors on reads, and wait out rate limits for up to
+        # GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS; a longer wait surfaces as RateLimitError
+        self.retry = github_retry(settings.github_rate_limit_max_wait_seconds, rate_limits)
+        self.auth = Auth.Token(self.token) if self.token else None
+        self.git_instance = self._new_github()
+
+    def _new_github(self, lazy: bool = False) -> Github:
+        return Github(
+            auth=self.auth,
+            timeout=settings.github_timeout_seconds,
+            retry=self.retry,
+            per_page=PER_PAGE,
+            lazy=lazy,
         )
-        auth = Auth.Token(self.token) if self.token else None
-        self.git_instance = Github(auth=auth, timeout=settings.github_timeout_seconds, retry=retry)
 
     def close(self) -> None:
         self.git_instance.close()
@@ -117,15 +133,12 @@ class GithubClient:
 
     def build_file_changes(self, pr, repo) -> list[FileChange]:
         files = []
+        blobs: dict[str, str | None] = {}
         for f in pr.get_files():
             if f.patch is None:
                 # binary files, very large diffs and pure renames come without a patch
                 log.info("file_skipped_no_patch", filename=f.filename, status=f.status)
                 continue
-
-            raw_content = None
-            if f.status != "removed":
-                raw_content = self._fetch_content(repo, f.filename, pr.head.sha)
 
             files.append(FileChange(
                 filename=f.filename,
@@ -133,26 +146,94 @@ class GithubClient:
                 additions=f.additions,
                 deletions=f.deletions,
                 patch=f.patch,
-                raw_content=raw_content,
             ))
+            # the file's git blob SHA: its content's identity, the same from push to push
+            # while the file doesn't change
+            sha = getattr(f, "sha", None)
+            blobs[f.filename] = sha if isinstance(sha, str) else None
+
+        present = [f for f in files if f.status != "removed"]
+        wanted = [(f.filename, blobs[f.filename]) for f in present]
+        contents = self.fetch_contents(repo, wanted, pr.head.sha)
+        for f, content in zip(present, contents, strict=True):
+            f.raw_content = content
 
         log.info("files_fetched", repo=repo.full_name, pr=pr.number, file_count=len(files))
         return files
 
-    def _fetch_content(self, repo, path: str, ref: str) -> str | None:
+    def fetch_contents(
+        self, repo, files: list[tuple[str, str | None]], ref: str
+    ) -> list[str | None]:
+        """The text at `ref` of each (path, blob SHA) in `files`, in order (None where it isn't
+        available), from the cache or fetched GITHUB_MAX_WORKERS at a time."""
+        repo_name = repo.full_name
+        if len(files) < 2 or self.max_workers < 2:
+            return [self._cached_content(repo, repo_name, file, ref) for file in files]
+
+        # PyGithub's Requester isn't thread-safe: it keeps one connection object per client, and
+        # that object holds each request's verb, URL and headers in attributes between request()
+        # and getresponse() (HTTPSRequestsConnectionClass in github/Requester.py), so two threads
+        # sharing a client can send each other's requests. Each worker thread gets a client of
+        # its own instead: its own Requester, connection and requests.Session. What the threads
+        # share (the token, the retry policy and the cache) holds no per-request state.
+        local = threading.local()
+        clients: list[Github] = []
+        lock = threading.Lock()
+
+        def fetch(file: tuple[str, str | None]) -> str | None:
+            thread_repo = getattr(local, "repo", None)
+            if thread_repo is None:
+                client = self._new_github(lazy=True)   # lazy: no request until get_contents
+                with lock:
+                    clients.append(client)
+                thread_repo = local.repo = client.get_repo(repo_name)
+            return self._cached_content(thread_repo, repo_name, file, ref)
+
+        pool = ThreadPoolExecutor(
+            max_workers=min(self.max_workers, len(files)), thread_name_prefix="github-contents"
+        )
+        try:
+            return list(pool.map(fetch, files))
+        finally:
+            # after a failure, the fetches still queued are dropped rather than sent
+            pool.shutdown(wait=True, cancel_futures=True)
+            for client in clients:
+                client.close()
+
+    def _cached_content(
+        self, repo, repo_name: str, file: tuple[str, str | None], ref: str
+    ) -> str | None:
+        # the text of a blob never changes, and neither does a path's at a commit
+        path, blob = file
+        owner_repo = repo_name.lower()
+        key = ("blob", owner_repo, blob) if blob else ("commit", owner_repo, ref, path)
+        text = self.cache.get("contents", *key)
+        if text is not None:
+            return text
+
+        self.retry.pause.wait_if_paused()   # while a request waits out a rate limit, hold back
+        text, sha = self._fetch_content(repo, path, ref)
+        # the PR may have moved on since its files were listed; a blob's key gets only its text
+        if text is not None and (blob is None or sha == blob):
+            self.cache.put("contents", *key, value=text)
+        return text
+
+    def _fetch_content(self, repo, path: str, ref: str) -> tuple[str | None, str | None]:
+        """The file's text at `ref` and its blob SHA, or (None, None) if it can't be had."""
         try:
             content = repo.get_contents(path, ref=ref)
         except RateLimitExceededException:
             raise
         except GithubException as e:
             log.warning("content_unavailable", filename=path, status=e.status)
-            return None
+            return None, None
 
         # a list means a directory or submodule; files over 1 MB come back without base64 content
         if isinstance(content, list) or content.encoding != "base64":
             log.warning("content_unavailable", filename=path, reason="not a file or over 1 MB")
-            return None
-        return content.decoded_content.decode("utf-8", errors="replace")
+            return None, None
+        text = content.decoded_content.decode("utf-8", errors="replace")
+        return text, getattr(content, "sha", None)
 
     def fetch_file(self, repo_name: str, path: str, ref: str) -> bytes | None:
         """The raw bytes of `path` at `ref` (a branch, tag or commit), or None if there's no such
