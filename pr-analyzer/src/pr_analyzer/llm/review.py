@@ -5,7 +5,8 @@ order while LLM_TOKEN_BUDGET allows (estimated prompt tokens, system prompt incl
 one that would go over it is skipped, and so is every uncached request after it. When a request
 fails, the ones not yet sent are dropped too, but the replies already in are kept; only if none
 came in does the error propagate, as a single request's always did. The warnings say how many
-files weren't AI-reviewed.
+files weren't AI-reviewed. Ctrl-C stops the review at once: no request still queued is sent, and
+the replies already in are cached before the interrupt goes on.
 """
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -54,10 +55,17 @@ def plan(
 
 
 def send(
-    requests: list[ReviewRequest], indexes: list[int], ask: Callable[[str], str], workers: int
+    requests: list[ReviewRequest],
+    indexes: list[int],
+    ask: Callable[[str], str],
+    workers: int,
+    replies: dict[int, str] | None = None,
 ) -> tuple[dict[int, str], Exception | None]:
-    """Replies by request index, and the first error; after an error nothing new is sent."""
-    replies: dict[int, str] = {}
+    """Replies by request index, and the first error; after an error nothing new is sent.
+
+    The replies go into `replies` as they come in, so a caller that Ctrl-C interrupts still has
+    the ones already received."""
+    replies = {} if replies is None else replies
     if workers <= 1 or len(indexes) <= 1:
         for index in indexes:
             try:
@@ -67,7 +75,8 @@ def send(
         return replies, None
 
     error: Exception | None = None
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="llm-review") as pool:
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="llm-review")
+    try:
         futures: dict[Future[str], int] = {
             pool.submit(ask, requests[index].prompt): index for index in indexes
         }
@@ -80,6 +89,12 @@ def send(
                 error = error or e
                 for pending in futures:
                     pending.cancel()   # only those not started yet; the others finish
+    except BaseException:
+        # Ctrl-C: the requests still queued are dropped rather than sent (each one is paid for),
+        # and the ones in flight aren't waited for
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
+    pool.shutdown()   # every request is done: the workers are idle
     return replies, error
 
 
@@ -100,10 +115,14 @@ def review(
     log.info("llm_requests", total=len(requests), cached=len(work.replies),
              sending=len(work.to_send), over_budget=len(work.over_budget), tokens=work.tokens)
 
-    sent, error = send(requests, work.to_send, ask, settings.llm_max_concurrency)
-    for index, reply in sent.items():
-        if cache.enabled and keep(reply):
-            cache.put("llm", *work.keys[index], value=reply)
+    sent: dict[int, str] = {}
+    try:
+        sent, error = send(requests, work.to_send, ask, settings.llm_max_concurrency, sent)
+    finally:
+        # also when Ctrl-C ends the run part way: the replies already in were paid for
+        for index, reply in sent.items():
+            if cache.enabled and keep(reply):
+                cache.put("llm", *work.keys[index], value=reply)
     work.replies.update(sent)
     if error is not None and not work.replies:
         raise error
