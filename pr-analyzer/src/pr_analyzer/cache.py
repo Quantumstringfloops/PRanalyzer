@@ -125,7 +125,7 @@ def directory_problem(path: Path, uid: int | None) -> str | None:
         return "it belongs to another user"
     if info.st_mode & 0o077:
         with contextlib.suppress(OSError):
-            os.chmod(path, PRIVATE_MODE)
+            os.chmod(path, PRIVATE_MODE)  # pr-analyzer: ignore - makes the folder private (0700)
         if os.lstat(path).st_mode & 0o077:
             return "other users can open it, and it can't be made private"
     return None
