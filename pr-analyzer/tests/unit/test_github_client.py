@@ -20,6 +20,7 @@ from pr_analyzer.exceptions import (
 )
 from pr_analyzer.github import client as client_module
 from pr_analyzer.github.client import GithubClient
+from pr_analyzer.github.ratelimit import WAIT_SLICE_SECONDS
 from pr_analyzer.models import PRSummary, Suggestion
 
 URL = "https://github.com/microsoft/vscode/pull/1"
@@ -344,7 +345,7 @@ def test_ctrl_c_ends_the_fetch_without_waiting_for_requests_in_flight(fake_githu
     for name in ("a.py", "b.py", "c.py", "d.py"):
         fake_github.add(name, slow)
 
-    def ctrl_c(futures, return_when):
+    def ctrl_c(futures, timeout=None, return_when=None):
         for _ in range(2):
             assert started.acquire(timeout=TIMEOUT)   # both workers are busy
         raise KeyboardInterrupt
@@ -360,6 +361,25 @@ def test_ctrl_c_ends_the_fetch_without_waiting_for_requests_in_flight(fake_githu
     for thread in in_flight:
         thread.join(TIMEOUT)
     assert sorted(path for path, _ in fake_github.requests) == ["a.py", "b.py"]   # none queued
+
+def test_the_wait_for_the_workers_is_sliced(fake_github, monkeypatch):
+    # on Windows (Python 3.11-3.13) one long wait on the main thread holds Ctrl-C back until it
+    # ends, so the fetch used to finish, rate-limit waits included, before stopping
+    monkeypatch.setattr(settings, "github_max_workers", 2)
+    for name in ("a.py", "b.py", "c.py"):
+        fake_github.add(name)
+    timeouts = []
+    real_wait = client_module.wait
+
+    def recording(futures, timeout=None, return_when=None):
+        timeouts.append(timeout)
+        return real_wait(futures, timeout=timeout, return_when=return_when)
+
+    monkeypatch.setattr(client_module, "wait", recording)
+    pr = GithubClient(token="t").fetch_pr(URL)
+
+    assert [f.raw_content for f in pr.files] == ["x = 1\n"] * 3
+    assert timeouts and all(t == WAIT_SLICE_SECONDS for t in timeouts)
 
 # ── content cache ─────────────────────────────────────────────────────────────
 def test_cached_contents_are_not_fetched_again(fake_github, tmp_path):

@@ -23,6 +23,7 @@ from pr_analyzer.exceptions import (
 )
 from pr_analyzer.github.markdown import comparable, neutralise, neutralise_line
 from pr_analyzer.github.ratelimit import (
+    WAIT_SLICE_SECONDS,
     RateLimitExceeded,
     RateLimitPause,
     RateLimitRetry,
@@ -210,8 +211,13 @@ class GithubClient:
         )
         try:
             futures = [pool.submit(fetch, file) for file in files]
-            # a failure is raised as soon as it happens, not once the files before it are in
-            wait(futures, return_when=FIRST_EXCEPTION)
+            # a failure is raised as soon as it happens, not once the files before it are in. The
+            # wait is sliced: on Windows one long wait would hold Ctrl-C back until it ended.
+            pending = set(futures)
+            while pending:
+                done, pending = wait(pending, timeout=WAIT_SLICE_SECONDS, return_when=FIRST_EXCEPTION)
+                if any(f.exception() is not None for f in done):
+                    break
             errors = [e for f in futures if f.done() and (e := f.exception()) is not None]
             if errors:
                 raise errors[0]

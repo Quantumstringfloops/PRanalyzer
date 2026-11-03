@@ -9,7 +9,7 @@ files weren't AI-reviewed. Ctrl-C stops the review at once: no request still que
 the replies already in are cached before the interrupt goes on.
 """
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
 import structlog
@@ -20,6 +20,9 @@ from pr_analyzer.llm.chunking import ReviewRequest, estimate_tokens
 from pr_analyzer.llm.prompts import SYSTEM_PROMPT
 
 log = structlog.get_logger(__name__)
+
+# waits for parallel requests come in slices: on Windows one long wait holds Ctrl-C back until it ends
+WAIT_SLICE_SECONDS = 0.5
 
 
 @dataclass
@@ -80,15 +83,18 @@ def send(
         futures: dict[Future[str], int] = {
             pool.submit(ask, requests[index].prompt): index for index in indexes
         }
-        for future in as_completed(futures):
-            if future.cancelled():
-                continue
-            try:
-                replies[futures[future]] = future.result()
-            except Exception as e:
-                error = error or e
-                for pending in futures:
-                    pending.cancel()   # only those not started yet; the others finish
+        pending = set(futures)
+        while pending:
+            done, pending = wait(pending, timeout=WAIT_SLICE_SECONDS, return_when=FIRST_COMPLETED)
+            for future in done:
+                if future.cancelled():
+                    continue
+                try:
+                    replies[futures[future]] = future.result()
+                except Exception as e:
+                    error = error or e
+                    for queued in pending:
+                        queued.cancel()   # only those not started yet; the others finish
     except BaseException:
         # Ctrl-C: the requests still queued are dropped rather than sent (each one is paid for),
         # and the ones in flight aren't waited for

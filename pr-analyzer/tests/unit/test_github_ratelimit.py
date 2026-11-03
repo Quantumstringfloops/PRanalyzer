@@ -476,7 +476,7 @@ def test_ctrl_c_ends_the_rate_limit_waits_of_a_parallel_fetch(api, monkeypatch):
     for name in ("a.py", "b.py", "c.py", "d.py"):
         api.add(f"/repos/o/r/contents/{name}", (429, {"Retry-After": "30"}, SLOW_DOWN), content(name))
 
-    def ctrl_c(futures, return_when):
+    def ctrl_c(futures, timeout=None, return_when=None):
         for _ in range(2):
             assert clock.events[-1].waiting.acquire(timeout=TIMEOUT)
         raise KeyboardInterrupt
