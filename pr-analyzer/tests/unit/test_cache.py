@@ -220,7 +220,18 @@ def test_unwritable_cache_never_fails_the_run(tmp_path):
     "github_pat_" + "b" * 30,
     "sk-" + "c" * 30,
     "AKIA" + "D" * 16,
+    "ASIA" + "E" * 16,
+    "xoxb-" + "123456789012-" + "f" * 24,
+    "sk_" + "live_" + "g" * 24,
+    "rk_" + "live_" + "h" * 24,
+    "AIza" + "i" * 35,
+    "glpat-" + "j" * 20,
+    "hf_" + "k" * 34,
     "-----BEGIN " + "RSA PRIVATE KEY-----",
+    "-----BEGIN " + "OPENSSH PRIVATE KEY-----",
+    "-----BEGIN " + "PRIVATE KEY-----",
+    "-----BEGIN " + "PGP PRIVATE KEY BLOCK-----",
+    "PuTTY-User-" + "Key-File-3: ssh-ed25519",
 ])
 def test_values_containing_credentials_are_not_written(tmp_path, credential):
     cache = make_cache(tmp_path)
@@ -228,6 +239,17 @@ def test_values_containing_credentials_are_not_written(tmp_path, credential):
 
     assert cache.get("contents", "k") is None
     assert entry_files(cache) == []
+
+@pytest.mark.parametrize("text", [
+    "Slack bot tokens start with xoxb-",
+    "stripe.api_key = os.environ['STRIPE_KEY']   # sk_live_... in production",
+    "-----BEGIN " + "PGP PUBLIC KEY BLOCK-----",
+    "-----BEGIN " + "CERTIFICATE-----",
+])
+def test_lookalikes_are_still_cached(tmp_path, text):
+    cache = make_cache(tmp_path)
+    cache.put("contents", "k", value=text)
+    assert cache.get("contents", "k") == text
 
 def test_our_own_keys_are_never_written(tmp_path):
     cache = make_cache(tmp_path, secrets=["an-unusual-own-key-value", ""])

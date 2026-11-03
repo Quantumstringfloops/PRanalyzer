@@ -19,8 +19,13 @@ Entries are read only from the user's own regular files, never through a symboli
 prune() deletes nothing but entry and temporary files in <kind>/<2 hex digits>/, following no
 symbolic link.
 
-Nothing that could hold a credential is written: callers never cache errors, and a value that
-contains one of our own keys, or looks like a well-known token or private key, is skipped.
+Callers never cache errors. A value isn't written if it contains one of our own keys (`secrets`:
+open_cache passes GITHUB_TOKEN, OPENAI_API_KEY and ANTHROPIC_API_KEY; values under 8 characters
+don't count) or matches CREDENTIAL: a private key block (PEM, OpenSSH or PGP), a PuTTY key file,
+or a GitHub, OpenAI or Anthropic (sk-), AWS access key ID (AKIA, ASIA), Slack (xox?-), Stripe live
+(sk_live_, rk_live_), Google API (AIza), GitLab (glpat-) or Hugging Face (hf_) token. Other
+secrets, such as an AWS secret access key on its own or a password in a database URL, aren't
+recognised.
 """
 import contextlib
 import hashlib
@@ -68,11 +73,21 @@ READ_FLAGS = (
 # tokens and keys a file or an LLM reply might contain; such values never reach the disk
 GITHUB_TOKEN_FORMAT = r"gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}"
 OPENAI_ANTHROPIC_KEY_FORMAT = r"sk-[A-Za-z0-9_-]{20,}"
-AWS_KEY_ID_FORMAT = r"AKIA[0-9A-Z]{16}"
-PRIVATE_KEY_HEADER = r"-----BEGIN [A-Z ]*PRIVATE KEY-----"
-CREDENTIAL = re.compile("|".join(
-    (GITHUB_TOKEN_FORMAT, OPENAI_ANTHROPIC_KEY_FORMAT, AWS_KEY_ID_FORMAT, PRIVATE_KEY_HEADER)
-))
+AWS_KEY_ID_FORMAT = r"(?:AKIA|ASIA)[0-9A-Z]{16}"   # long-term and temporary (STS) key IDs
+SLACK_TOKEN_FORMAT = r"xox[a-z]-[0-9A-Za-z-]{10,}"
+STRIPE_LIVE_KEY_FORMAT = r"[rs]k_live_[0-9A-Za-z]{20,}"
+GOOGLE_API_KEY_FORMAT = r"AIza[0-9A-Za-z_-]{35}"
+GITLAB_TOKEN_FORMAT = r"glpat-[0-9A-Za-z_-]{20,}"
+HUGGING_FACE_TOKEN_FORMAT = r"hf_[A-Za-z0-9]{34}"
+# the first line of a PEM or OpenSSH private key ("BEGIN RSA PRIVATE KEY" between dashes), or of
+# a PGP one ("BEGIN PGP PRIVATE KEY BLOCK")
+PRIVATE_KEY_HEADER = r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----"
+PUTTY_KEY_HEADER = r"PuTTY-User-Key-File-[0-9]+:"
+CREDENTIAL = re.compile("|".join((
+    GITHUB_TOKEN_FORMAT, OPENAI_ANTHROPIC_KEY_FORMAT, AWS_KEY_ID_FORMAT, SLACK_TOKEN_FORMAT,
+    STRIPE_LIVE_KEY_FORMAT, GOOGLE_API_KEY_FORMAT, GITLAB_TOKEN_FORMAT, HUGGING_FACE_TOKEN_FORMAT,
+    PRIVATE_KEY_HEADER, PUTTY_KEY_HEADER,
+)))
 
 
 def default_cache_dir() -> Path:
