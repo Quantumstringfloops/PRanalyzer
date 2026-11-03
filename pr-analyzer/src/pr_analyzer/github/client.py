@@ -153,6 +153,28 @@ class GithubClient:
             return None
         return content.decoded_content.decode("utf-8", errors="replace")
 
+    def fetch_file(self, repo_name: str, path: str, ref: str) -> bytes | None:
+        """The raw bytes of `path` at `ref` (a branch, tag or commit), or None if there's no such
+        file. Used for .pr-analyzer.toml on the PR's base branch."""
+        try:
+            content = self.git_instance.get_repo(repo_name).get_contents(path, ref=ref)
+        except RateLimitExceededException as e:
+            raise RateLimitError(self._reset_time(e)) from e
+        except GithubException as e:
+            if e.status == 404:
+                return None
+            # anything else must not silently fall back to defaults the project didn't choose
+            problem = self._map_error(e, repo_name)
+            raise PRAnalyzerError(f"Could not read {path} at {ref}: {problem}") from e
+        except requests.exceptions.RequestException as e:
+            raise PRAnalyzerError(f"Could not reach GitHub: {e}") from e
+
+        if isinstance(content, list):
+            return None   # a directory of that name
+        if content.encoding != "base64":
+            raise PRAnalyzerError(f"{path} at {ref} is over 1 MB, too large to read")
+        return content.decoded_content
+
     def post_review(
         self, pr: PRSummary, body: str, comments: list[tuple[Suggestion, int]]
     ) -> None:

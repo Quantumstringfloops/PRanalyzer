@@ -112,14 +112,15 @@ pr-analyzer version
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--skip-llm` | off | Run the static and security checks only |
-| `--post-review` | off | Post the result as a GitHub review: inline comments for MEDIUM and above, LOW findings counted in the summary. Later runs on the same PR update that summary and comment only on new findings (needs a token that can write pull requests) |
+| `--post-review` | off | Post the result as a GitHub review: inline comments for MEDIUM and above (configurable), LOW findings counted in the summary. Later runs on the same PR update that summary and comment only on new findings (needs a token that can write pull requests) |
 | `--fail-on-block` / `--no-fail-on-block` | on | Exit with code 1 when the PR is blocked |
 | `--output`, `-o` | `rich` | `rich`, `json` or `markdown`. Reports go to stdout, logs to stderr |
+| `--config PATH` | — | Project settings to use instead of the `.pr-analyzer.toml` on the PR's base branch (see [Project configuration](#project-configuration-pr-analyzertoml)) |
 | `--verbose`, `-v` | off | Show progress logs |
 
 URLs copied from a PR's *Files changed*, *Commits* or *Checks* tab work too.
 
-**Exit codes:** `0` passed · `1` blocked (with `--fail-on-block`) · `2` the PR could not be analysed (bad URL, authentication, rate limit, or an unexpected error)
+**Exit codes:** `0` passed · `1` blocked (with `--fail-on-block`) · `2` the PR could not be analysed (bad URL, authentication, rate limit, invalid configuration, or an unexpected error)
 
 ### Ignoring a finding
 
@@ -130,6 +131,77 @@ subprocess.run(cmd, shell=True)  # pr-analyzer: ignore - cmd is a fixed string
 ```
 
 Every finding on that line is dropped and doesn't count towards the score, whichever check reported it: the regex rules, Semgrep, the dependency audit or the LLM. The report's warnings name each ignored line, so a reviewer can see what a PR silenced.
+
+### Project configuration (`.pr-analyzer.toml`)
+
+A repository can tune the checks with a `.pr-analyzer.toml` file in its root. Every key is optional:
+
+```toml
+# rule ids and whole stages to switch off (see the table below)
+disable = ["magic-number", "missing-return-type"]
+
+# files to leave out: no findings are reported for them and they are not sent to the LLM
+ignore_paths = ["docs/**", "*.min.js", "tests/fixtures/"]
+
+# severities that block the PR (exit code 1 with --fail-on-block); [] never blocks
+block_on = ["CRITICAL", "HIGH"]
+
+# the lowest severity that gets an inline review comment; lower ones are counted in the summary
+inline_min_severity = "MEDIUM"
+
+[thresholds]
+complexity_medium = 15   # a function's cyclomatic complexity above this is MEDIUM...
+complexity_high = 30     # ...and above this, HIGH
+max_file_lines = 500     # longer files get a file-length finding
+max_line_length = 120    # longer added lines get a long-line finding
+```
+
+The values shown are the defaults. Severities can be written in any case.
+
+**Where it is read from.** When a PR is analysed, `.pr-analyzer.toml` is read from the PR's **base branch** through the GitHub API, never from the PR itself, so a PR can't loosen its own checks; a change to the file takes effect once it is merged. A file in the current directory is never picked up (in CI that is the PR's own checkout). `--config PATH` uses a local file instead. No file means the defaults.
+
+**Validation.** Unknown keys, unknown rule ids, bad severities and thresholds that aren't positive whole numbers are errors: the run stops with exit code 2 and a message listing every problem, with a suggestion for likely typos:
+
+```
+Configuration error: .pr-analyzer.toml on main is invalid:
+  - unknown key 'disabel' (did you mean 'disable'?)
+  - disable: unknown rule id 'magic-numbers' (did you mean 'magic-number'?)
+```
+
+**`ignore_paths` patterns** work like `.gitignore`: `*` and `?` match within one directory and `**` across directories; a pattern with no `/` (like `*.min.js`) matches in every directory, one with a leading or inner `/` (like `docs/**` or `/setup.py`) only from the repository root, a trailing `/` matches a directory, and a pattern that matches a directory covers every file in it. The report notes which files were skipped.
+
+**Rule ids.** Each finding's id is in the JSON report (`"rule"`), and the review summary shows it next to each counted rule.
+
+| Id | Flags | Severity | Applies to |
+|----|-------|----------|------------|
+| `todo-comment` | `TODO` / `FIXME` | LOW | source files |
+| `console-log` | `console.log(` | LOW | JavaScript / TypeScript |
+| `print-call` | `print(` | LOW | Python |
+| `bare-except` | `except:` | MEDIUM | Python |
+| `long-line` | added line longer than `max_line_length` | LOW | source files |
+| `magic-number` | unexplained number literal | LOW | source files, not tests |
+| `missing-return-type` | `def` without `->` | LOW | Python, not tests |
+| `complexity` | function above `complexity_medium` / `complexity_high` | MEDIUM / HIGH | Python, JavaScript, TypeScript |
+| `file-length` | file longer than `max_file_lines` | LOW | Python, JavaScript, TypeScript |
+| `aws-access-key` | AWS access key id | CRITICAL | every file |
+| `hardcoded-api-key` | `api_key = "..."` and similar | CRITICAL | every file |
+| `private-key` | PEM private key block | CRITICAL | every file |
+| `github-token` | GitHub token | CRITICAL | every file |
+| `jwt-token` | JSON Web Token | HIGH | every file |
+| `hardcoded-password` | `password = "..."` and similar | CRITICAL | every file |
+| `db-connection-string` | database URL with a password | CRITICAL | every file |
+| `sql-injection` | SQL built with an f-string, `%`, `.format()` or `+` | HIGH | source files |
+| `eval` | `eval(` | HIGH | source files |
+| `pickle-load` | `pickle.load(` / `pickle.loads(` | HIGH | source files |
+| `yaml-load` | `yaml.load(` without `SafeLoader` | HIGH | source files |
+| `subprocess-shell` | `subprocess.*(..., shell=True)` | HIGH | source files |
+| `insecure-random` | `random` used for tokens, passwords or keys | MEDIUM | source files |
+| `debug-mode` | `debug=True` | MEDIUM | source files |
+| `semgrep` | the whole Semgrep scan | per Semgrep rule | changed files |
+| `dependency-audit` | the whole pip-audit check | HIGH | `requirements*.txt` |
+| `llm` | the whole LLM review | per suggestion | the diff |
+
+To tune individual Semgrep rules, point `SEMGREP_CONFIG` at your own ruleset.
 
 ---
 
@@ -236,7 +308,7 @@ score = security×0.35 + complexity×0.25 + style×0.15 + documentation×0.15 + 
 | 65–69 | D |
 | 0–64 | F |
 
-A PR is **blocked** if any suggestion has severity `CRITICAL` or `HIGH`, regardless of overall score.
+A PR is **blocked** if any suggestion has severity `CRITICAL` or `HIGH`, regardless of overall score. A project can choose other severities with `block_on` in `.pr-analyzer.toml`.
 
 ---
 
@@ -258,7 +330,7 @@ The scanners are optional. Install them with `pip install "pranalyzer[security]"
 Start Ollama and pull the model (`ollama pull llama3.2`), point `LLM_PROVIDER` at OpenAI or Anthropic, or pass `--skip-llm`.
 
 **Bot posts no inline comments**
-Only MEDIUM, HIGH and CRITICAL findings get inline comments, and only on lines that are part of the diff. Other findings at those levels are listed in the review body, and LOW findings are counted there by rule. A finding that already has a comment isn't commented on again when the PR is re-analysed. If GitHub rejects the inline comments, the summary is still posted. PRs from forks can't be reviewed from Actions (read-only token, no secrets).
+Only MEDIUM, HIGH and CRITICAL findings get inline comments (or the severities from `inline_min_severity` up), and only on lines that are part of the diff. Other findings at those levels are listed in the review body, and LOW findings are counted there by rule. A finding that already has a comment isn't commented on again when the PR is re-analysed. If GitHub rejects the inline comments, the summary is still posted. PRs from forks can't be reviewed from Actions (read-only token, no secrets).
 
 ---
 

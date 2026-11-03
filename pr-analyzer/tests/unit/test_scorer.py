@@ -81,3 +81,18 @@ def test_grade_matches_the_displayed_score():
 def test_delta_against_base():
     assert scorer.score([], base=90.0).delta == 10.0
     assert scorer.score([]).delta is None
+
+# ── blocking severities from .pr-analyzer.toml ────────────────────────────────
+def test_blocking_severities_are_configurable():
+    medium = [make_suggestion(severity="MEDIUM")]
+    high = [make_suggestion(severity="HIGH")]
+
+    assert scorer.score(medium, block_on={"CRITICAL", "HIGH", "MEDIUM"}).passed is False
+    assert scorer.score(high, block_on={"CRITICAL"}).passed is True
+    assert scorer.score(high, block_on=set()).passed is True
+
+def test_blocked_summary_never_says_clean_pass():
+    result = scorer.score([make_suggestion(severity="MEDIUM")], block_on={"MEDIUM"})
+    assert result.overall_score >= 90
+    assert "Clean pass" not in result.summary
+    assert "blocking" in result.summary

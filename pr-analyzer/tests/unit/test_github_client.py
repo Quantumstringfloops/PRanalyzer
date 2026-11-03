@@ -169,6 +169,44 @@ def test_network_error_becomes_analyzer_error(github):
     with pytest.raises(PRAnalyzerError):
         GithubClient(token="t").fetch_pr(URL)
 
+# ── fetch_file: .pr-analyzer.toml on the base branch ──────────────────────────
+CONFIG = ".pr-analyzer.toml"
+
+def test_fetch_file_reads_the_given_ref(github):
+    github.repo.get_contents.return_value = make_content('disable = ["llm"]\n')
+
+    raw = GithubClient(token="t").fetch_file("microsoft/vscode", CONFIG, "main")
+
+    assert raw == b'disable = ["llm"]\n'
+    github.github.return_value.get_repo.assert_called_with("microsoft/vscode")
+    github.repo.get_contents.assert_called_once_with(CONFIG, ref="main")
+
+def test_fetch_file_missing_means_none(github):
+    github.repo.get_contents.side_effect = UnknownObjectException(404, {"message": "Not Found"}, {})
+    assert GithubClient(token="t").fetch_file("microsoft/vscode", CONFIG, "main") is None
+
+def test_fetch_file_directory_means_none(github):
+    github.repo.get_contents.return_value = [make_content()]
+    assert GithubClient(token="t").fetch_file("microsoft/vscode", CONFIG, "main") is None
+
+def test_fetch_file_other_errors_are_not_ignored(github):
+    # silently using the defaults could drop settings the project chose, e.g. a stricter block_on
+    github.repo.get_contents.side_effect = GithubException(500, {"message": "Server Error"}, {})
+    with pytest.raises(PRAnalyzerError, match=r"Could not read \.pr-analyzer\.toml at main"):
+        GithubClient(token="t").fetch_file("microsoft/vscode", CONFIG, "main")
+
+def test_fetch_file_rate_limit_says_when_to_retry(github):
+    github.repo.get_contents.side_effect = RateLimitExceededException(
+        403, {"message": "API rate limit exceeded"}, {"X-RateLimit-Reset": "1767225600"}
+    )
+    with pytest.raises(RateLimitError):
+        GithubClient(token="t").fetch_file("microsoft/vscode", CONFIG, "main")
+
+def test_fetch_file_over_1mb_is_an_error(github):
+    github.repo.get_contents.return_value = make_content(encoding="none")
+    with pytest.raises(PRAnalyzerError, match="over 1 MB"):
+        GithubClient(token="t").fetch_file("microsoft/vscode", CONFIG, "main")
+
 def test_no_token_uses_unauthenticated_client():
     with patch("pr_analyzer.github.client.Github") as mock_github:
         GithubClient(token="")

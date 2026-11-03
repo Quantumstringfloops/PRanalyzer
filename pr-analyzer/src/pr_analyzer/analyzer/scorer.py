@@ -1,3 +1,5 @@
+from collections.abc import Collection
+
 import structlog
 from pr_analyzer.models import QualityScore, Suggestion
 log = structlog.get_logger(__name__)
@@ -28,7 +30,8 @@ GRADE_THRESHOLDS = [
     (65, "D"),  (0,  "F"),
 ]
 
-BLOCK_SEVERITY = {"CRITICAL", "HIGH"}
+# the default; a project's .pr-analyzer.toml can name other severities in `block_on`
+BLOCK_SEVERITY = frozenset({"CRITICAL", "HIGH"})
 
 
 def _severity(s: Suggestion) -> str:
@@ -36,7 +39,12 @@ def _severity(s: Suggestion) -> str:
 
 
 class Scorer:
-    def score(self, suggestions: list[Suggestion], base: float | None = None) -> QualityScore:
+    def score(
+        self,
+        suggestions: list[Suggestion],
+        base: float | None = None,
+        block_on: Collection[str] = BLOCK_SEVERITY,
+    ) -> QualityScore:
 
         dimension_groups = self._group_by_dimension(suggestions)
         dimension_scores = {
@@ -46,9 +54,9 @@ class Scorer:
         # round once, before grading, so the score shown and the grade always agree
         weighted_score = round(self._compute_weighted_scores(dimension_scores), 1)
         grade = self._map_grade(weighted_score)
-        check_passed = self._check_passed(suggestions)
+        check_passed = self._check_passed(suggestions, block_on)
         delta = self._compute_delta(weighted_score, base)
-        summary = self._write_summary(suggestions,weighted_score)
+        summary = self._write_summary(suggestions, weighted_score, check_passed)
 
         critical_count = sum(1 for s in suggestions if _severity(s) == "CRITICAL")
         high_count = sum(1 for s in suggestions if _severity(s) == "HIGH")
@@ -98,15 +106,17 @@ class Scorer:
                 return grade
         return "F"
 
-    def _check_passed(self, suggestions: list[Suggestion]) -> bool:
-        return not any(_severity(s) in BLOCK_SEVERITY for s in suggestions)
+    def _check_passed(
+        self, suggestions: list[Suggestion], block_on: Collection[str] = BLOCK_SEVERITY
+    ) -> bool:
+        return not any(_severity(s) in block_on for s in suggestions)
 
     def _compute_delta(self, overall: float, base: float | None) -> float | None:
         if base is None:
             return None
         return round(overall - base, 2)
 
-    def _write_summary(self, suggestions: list[Suggestion], score: float) -> str:
+    def _write_summary(self, suggestions: list[Suggestion], score: float, passed: bool = True) -> str:
         critical = sum(1 for s in suggestions if _severity(s) == "CRITICAL")
         high = sum(1 for s in suggestions if _severity(s) == "HIGH")
 
@@ -114,6 +124,9 @@ class Scorer:
             return f"{critical} critical issue(s) found — review required"
         if high:
             return f"{high} high severity issue(s) found"
+        if not passed:
+            # a project that blocks on MEDIUM must not see "Clean pass" next to BLOCKED
+            return f"{len(suggestions)} issue(s) found, including blocking ones"
         if score >= 90:
             return "Clean pass — no significant issues"
         return f"{len(suggestions)} issue(s) found across multiple files"
