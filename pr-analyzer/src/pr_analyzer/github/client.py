@@ -22,7 +22,12 @@ from pr_analyzer.exceptions import (
     RepositoryNotFoundError,
 )
 from pr_analyzer.github.markdown import neutralise, neutralise_line
-from pr_analyzer.github.ratelimit import RateLimitPause, RateLimitRetry, github_retry
+from pr_analyzer.github.ratelimit import (
+    RateLimitExceeded,
+    RateLimitPause,
+    RateLimitRetry,
+    github_retry,
+)
 from pr_analyzer.models import FileChange, PRSummary, Suggestion
 
 log = structlog.get_logger(__name__)
@@ -377,6 +382,10 @@ class GithubClient:
 
     @staticmethod
     def _reset_time(e: RateLimitExceededException) -> datetime:
+        if isinstance(e, RateLimitExceeded):
+            # the retry policy worked it out, from an HTTP date or GitHub's minute for a limit
+            # named only in the message too (x-ratelimit-reset is the hourly limit's)
+            return datetime.fromtimestamp(e.retry_at)
         headers = {k.lower(): v for k, v in (e.headers or {}).items()}
         try:
             if "retry-after" in headers:  # secondary rate limits say how long to wait

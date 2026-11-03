@@ -6,6 +6,7 @@ import json
 import sys
 import threading
 import types
+from email.utils import formatdate
 
 import github
 import pytest
@@ -134,7 +135,12 @@ def retry(clock):
     ({"X-RateLimit-Remaining": "12", "X-RateLimit-Reset": str(int(NOW) + 3000)}, 60),
     ({}, 60),                                   # GitHub: wait at least a minute
     ({"Retry-After": "nan"}, 60),
-    ({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, 60),
+    ({"Retry-After": "soon"}, 60),
+    # Retry-After can also be an HTTP date
+    ({"Retry-After": formatdate(NOW + 30, usegmt=True)}, 30),
+    ({"Retry-After": formatdate(NOW + 7200, usegmt=True)}, 7200),
+    ({"Retry-After": "Fri, 15 Jan 2027 08:00:30 -0000"}, 30),   # -0000: UTC
+    ({"Retry-After": formatdate(NOW - 600, usegmt=True)}, 0),
 ])
 def test_rate_limit_wait(headers, expected):
     assert rate_limit_wait(headers, NOW) == expected
@@ -183,6 +189,14 @@ def test_wait_over_the_cap_raises_at_once(retry, clock):
         retry.increment("GET", "/repos/o/r", response=response(429, {"Retry-After": "61"}))
     assert clock.waits == []
 
+def test_http_date_over_the_cap_raises_at_once(retry, clock):
+    # it was read as "GitHub didn't say", and waited out three times for a minute
+    date = formatdate(NOW + 7200, usegmt=True)
+    with pytest.raises(RateLimitExceededException) as excinfo:
+        retry.increment("GET", "/repos/o/r", response=response(429, {"Retry-After": date}))
+    assert excinfo.value.retry_at == NOW + 7200
+    assert clock.waits == []
+
 def test_zero_cap_never_waits(clock):
     retry = github_retry(0, clock.pause())
     with pytest.raises(RateLimitExceededException):
@@ -193,9 +207,10 @@ def test_gives_up_after_three_retries(retry, clock):
     for _ in range(3):
         retry = retry.increment("GET", "/repos/o/r", response=response(429, {"Retry-After": "1"}))
         retry.sleep()
-    with pytest.raises(RateLimitExceededException):
+    with pytest.raises(RateLimitExceededException) as excinfo:
         retry.increment("GET", "/repos/o/r", response=response(429, {"Retry-After": "1"}))
     assert clock.waits == [1, 1, 1]
+    assert excinfo.value.retry_at == NOW + 1
 
 def test_server_errors_back_off_without_the_rate_limit_pause(retry, clock):
     again = retry.increment("GET", "/repos/o/r", response=response(503, {"Retry-After": "3600"}))
@@ -372,8 +387,28 @@ def test_fetch_reports_a_limit_that_resets_too_late(api, clock):
     with pytest.raises(RateLimitError) as excinfo:
         client.fetch_pr(URL)
 
-    assert excinfo.value.reset_time.timestamp() == reset
+    assert excinfo.value.reset_time.timestamp() == reset + 1   # the reset is in whole seconds
     assert clock.waits == []
+
+@pytest.mark.parametrize("retry_after, reset_in", [
+    # GitHub's "wait a minute", not the reset of the hourly limit 40 minutes away
+    (None, 60),
+    (formatdate(NOW + 7200, usegmt=True), 7200),   # was "now"
+])
+def test_limit_too_long_to_wait_says_when_to_try_again(api, clock, monkeypatch,
+                                                      retry_after, reset_in):
+    monkeypatch.setattr(settings, "github_rate_limit_max_wait_seconds", 30)
+    headers = {"X-RateLimit-Remaining": "4000", "X-RateLimit-Reset": str(int(NOW) + 2400)}
+    if retry_after:
+        headers["Retry-After"] = retry_after
+    api.add("/repos/o/r/pulls/1", (403, headers, SECONDARY))
+    client = GithubClient(token="", rate_limits=clock.pause())
+
+    with pytest.raises(RateLimitError) as excinfo:
+        client.fetch_pr(URL)
+
+    assert excinfo.value.reset_time.timestamp() == NOW + reset_in
+    assert api.sent("/repos/o/r/pulls/1") == 1 and clock.waits == []
 
 # ── ending a parallel fetch ───────────────────────────────────────────────────
 def test_ctrl_c_ends_the_rate_limit_waits_of_a_parallel_fetch(api, monkeypatch):
@@ -419,10 +454,11 @@ def test_limit_too_long_for_one_worker_ends_the_others_waits(api, monkeypatch):
     api.add("/repos/o/r/contents/a.py", a_limited, content("a.py"))
     api.add("/repos/o/r/contents/b.py", b_too_long)
 
-    with pytest.raises(RateLimitError):
+    with pytest.raises(RateLimitError) as excinfo:
         GithubClient(token="", rate_limits=clock.pause()).fetch_pr(URL)
     join_threads("github-contents")
 
+    assert excinfo.value.reset_time.timestamp() == NOW + 3600
     assert api.sent("/repos/o/r/contents/a.py") == 1
     assert clock.waits == [30]
 

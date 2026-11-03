@@ -4,12 +4,13 @@ GitHub refuses a rate-limited request with 403 or 429 and doesn't carry it out, 
 even a POST, can be sent again once the limit allows:
 
 - primary limit (`x-ratelimit-remaining: 0`): wait until `x-ratelimit-reset` (epoch seconds)
-- secondary limit: wait `retry-after` seconds, or a minute when GitHub doesn't say
+- secondary limit: wait `retry-after` (seconds, or an HTTP date), or a minute when GitHub
+  doesn't say
 
 A wait longer than GITHUB_RATE_LIMIT_MAX_WAIT_SECONDS raises RateLimitExceededException instead,
-which the client reports as RateLimitError (exit code 2), as before. Waits are logged as
-warnings, and they can be cancelled: when a parallel fetch fails or is interrupted (Ctrl-C), its
-waits end at once and none of its requests is sent again.
+which the client reports as RateLimitError (exit code 2), with the time GitHub lets the request
+through again. Waits are logged as warnings, and they can be cancelled: when a parallel fetch
+fails or is interrupted (Ctrl-C), its waits end at once and none of its requests is sent again.
 
 This is a urllib3 Retry of our own rather than PyGithub's GithubRetry because GithubRetry (2.10)
 caps only primary-limit waits: a 403 with Retry-After falls through to urllib3, which sleeps for
@@ -25,6 +26,8 @@ import math
 import threading
 import time
 from collections.abc import Callable, Mapping
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self
 
@@ -69,12 +72,26 @@ def number(value: str | None) -> float | None:
     return parsed if parsed is not None and math.isfinite(parsed) else None
 
 
+def retry_after(value: str | None, now: float) -> float | None:
+    """A Retry-After header in seconds from `now`: it gives either seconds or an HTTP date."""
+    seconds = number(value)
+    if seconds is None and value:
+        try:
+            date = parsedate_to_datetime(value)
+            if date.tzinfo is None:   # "-0000": UTC, says RFC 5322
+                date = date.replace(tzinfo=timezone.utc)
+            seconds = date.timestamp() - now
+        except (ValueError, OverflowError):
+            return None
+    return max(seconds, 0.0) if seconds is not None else None
+
+
 def rate_limit_wait(headers: Mapping[str, str], now: float) -> float:
     """Seconds GitHub asks for before a rate-limited request may be sent again."""
     headers = lowercase(headers)
-    retry_after = number(headers.get("retry-after"))
-    if retry_after is not None:
-        return max(retry_after, 0.0)
+    after = retry_after(headers.get("retry-after"), now)
+    if after is not None:
+        return after
     reset = number(headers.get("x-ratelimit-reset"))
     if headers.get("x-ratelimit-remaining") == "0" and reset is not None:
         # +1: the reset time is in whole seconds, and when in that second it comes is unknown
@@ -91,6 +108,14 @@ def read_json(response: BaseHTTPResponse) -> Any:
         return json.loads(text)
     except ValueError:
         return {"data": text}
+
+
+class RateLimitExceeded(RateLimitExceededException):
+    """A rate limit that isn't waited out, and when GitHub lets the request through again."""
+
+    def __init__(self, status: int, data: Any, headers: dict[str, str], retry_at: float):
+        super().__init__(status, data, headers)
+        self.retry_at = retry_at   # epoch seconds
 
 
 class RequestsCancelled(Exception):
@@ -211,13 +236,14 @@ class RateLimitRetry(Retry):
             if not Requester.isRateLimitError(message or ""):
                 raise Requester.createException(response.status, headers, data)
 
-        wait = rate_limit_wait(headers, self.pause.clock())
+        now = self.pause.clock()
+        wait = rate_limit_wait(headers, now)
         if wait > self.max_wait:
-            raise RateLimitExceededException(response.status, data, headers)
+            raise RateLimitExceeded(response.status, data, headers, retry_at=now + wait)
         try:
             retry = super().increment(method, url, response, error, _pool, _stacktrace)
         except MaxRetryError:
-            raise RateLimitExceededException(response.status, data, headers) from None
+            raise RateLimitExceeded(response.status, data, headers, retry_at=now + wait) from None
         retry.rate_limit_wait = wait
         return retry
 
