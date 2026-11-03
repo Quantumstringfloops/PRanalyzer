@@ -354,7 +354,9 @@ Results that can't change are kept on disk, in `CACHE_DIR`:
 - **file contents**, by git blob SHA: a file that didn't change keeps its blob SHA from push to push, so a new push fetches only the files it changed;
 - **LLM replies**, by provider, model and the exact prompt: re-running the same diff costs no tokens and doesn't count towards `LLM_TOKEN_BUDGET`.
 
-Failed requests are never cached, and neither is anything that contains your API keys or looks like a token or private key. A damaged entry counts as a miss, entries are written atomically, and the size and age limits are applied at most once an hour. The directory is private to your user, since it may hold code from private repositories. `--no-cache` skips the cache for one run (for a fresh LLM review, say); `CACHE_ENABLED=false` turns it off.
+Failed requests are never cached, and neither is anything that contains your API keys or looks like a token or private key. A damaged entry counts as a miss, entries are written atomically, and the size and age limits are applied at most once an hour. `--no-cache` skips the cache for one run (for a fresh LLM review, say); `CACHE_ENABLED=false` turns it off.
+
+Since the cache may hold code from private repositories, pr-analyzer creates its directory private to your user (mode 700). It uses an existing `CACHE_DIR`, and the `v1` folder in it, only if each is a real directory (not a symbolic link) that belongs to you: one that other users can open too is made private, and anything else turns the cache off for the run, with a warning. Entries are read only from your own files, never through a symbolic link, and pruning deletes nothing but the cache's own entry and temporary files. On Windows, which has no POSIX owners or modes, only symbolic links are refused.
 
 To keep the cache between GitHub Actions runs, restore and save it with `actions/cache`. A saved cache can't be updated, so each run saves a new one and the next run restores the newest:
 
