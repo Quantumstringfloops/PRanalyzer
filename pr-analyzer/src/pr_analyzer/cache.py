@@ -11,13 +11,18 @@ an entry that can't be read or decoded counts as a miss. Entries unused for CACH
 expire, and once the cache outgrows CACHE_MAX_SIZE_MB the least recently used go first.
 
 The cache may hold code from private repositories, and anyone else who could write to it could
-plant entries, or make prune() delete files elsewhere through a symbolic link. So <dir> and
-<dir>/v1 are created private to the user (PRIVATE_MODE), and before either is used it must be a
-real directory (not a symbolic link) that belongs to the user: one of the user's that others can
-use too is made private, and anything else turns the cache off for the run, with a warning.
-Entries are read only from the user's own regular files, never through a symbolic link, and
-prune() deletes nothing but entry and temporary files in <kind>/<2 hex digits>/, following no
-symbolic link.
+plant entries, swap them, or make prune() delete files elsewhere through a symbolic link. So
+<dir> and <dir>/v1 are created private to the user (PRIVATE_MODE), and before either is used it
+must be a real directory (not a symbolic link) that belongs to the user: one of the user's that
+others can use too is made private, and anything else turns the cache off for the run, with a
+warning. Until then others could have planted, linked or swapped entries in it, so once either
+has been made private the cache's own files in <dir>/v1 are deleted before any is used, with a
+warning if there were any (see _clear). The <kind> and <2 hex digits> directories that hold an
+entry must be real directories of the user's too, or the cache is off for the run, with a
+warning. Entries are read only from the user's own regular files with no other hard link,
+never through a symbolic link. prune() deletes nothing but entry and temporary files in
+<kind>/<2 hex digits>/, following no symbolic link, and replaces its stamp file rather than
+writing through a link put in its place.
 
 Callers never cache errors. A value isn't written if it contains one of our own keys (`secrets`:
 open_cache passes GITHUB_TOKEN, OPENAI_API_KEY and ANTHROPIC_API_KEY; values under 8 characters
@@ -111,28 +116,44 @@ def current_uid() -> int | None:
 
 
 def directory_problem(path: Path, uid: int | None) -> str | None:
-    """Why the cache mustn't use the directory at `path`, or None if only the user can use it.
-    A directory of the user's that others can use too is made private first. Raises OSError if
-    there's nothing at `path`, or not a directory."""
+    """Why the cache mustn't use the directory at `path`, or None if it is a real directory that
+    belongs to the user. Raises OSError if there's nothing at `path`, or not a directory."""
     info = os.lstat(path)
     if stat.S_ISLNK(info.st_mode):
         return "it is a symbolic link"
     if not stat.S_ISDIR(info.st_mode):
         raise NotADirectoryError(f"Not a directory: {str(path)!r}")
-    if uid is None:
-        return None
-    if info.st_uid != uid:
+    if uid is not None and info.st_uid != uid:
         return "it belongs to another user"
-    if info.st_mode & 0o077:
-        with contextlib.suppress(OSError):
-            os.chmod(path, PRIVATE_MODE)  # pr-analyzer: ignore - makes the folder private (0700)
-        if os.lstat(path).st_mode & 0o077:
-            return "other users can open it, and it can't be made private"
     return None
 
 
+def others_can_use(path: Path, uid: int | None) -> bool:
+    # where files have no POSIX owner and mode (Windows), nothing is made private
+    return uid is not None and bool(os.lstat(path).st_mode & 0o077)
+
+
+def make_private(path: Path) -> str | None:
+    """Makes the directory at `path` private to the user: why that failed, or None."""
+    with contextlib.suppress(OSError):
+        os.chmod(path, PRIVATE_MODE)  # pr-analyzer: ignore - makes the folder private (0700)
+    if os.lstat(path).st_mode & 0o077:
+        return "other users can open it, and it can't be made private"
+    return None
+
+
+def warn_unsafe(path: Path, problem: str, fix: str) -> None:
+    log.warning("cache_dir_unsafe", path=str(path), problem=problem,
+                hint=f"caching off for this run: {fix}")
+
+
 def own_file(info: os.stat_result, uid: int | None) -> bool:
-    return stat.S_ISREG(info.st_mode) and (uid is None or info.st_uid == uid)
+    # the cache never gives a file a second hard link: a file with one may be any other file
+    # (another entry, say) linked into an entry's place
+    return (
+        stat.S_ISREG(info.st_mode) and info.st_nlink <= 1
+        and (uid is None or info.st_uid == uid)
+    )
 
 
 def subdirectories(path: Path) -> list[Path]:
@@ -177,8 +198,8 @@ class DiskCache:
         self._lock = threading.Lock()
         self.hits = self.misses = self.writes = 0
         self.writable = True   # until a write fails: then the run carries on without writing
-        self._checked = False   # <dir> and <dir>/v1 passed directory_problem
-        self._unsafe = False    # one of them didn't: the cache is off for the run
+        self._checked = False   # <dir> and <dir>/v1 passed their check
+        self._unsafe = False    # a directory of the cache didn't: the cache is off for the run
 
     @classmethod
     def disabled(cls) -> "DiskCache":
@@ -191,7 +212,9 @@ class DiskCache:
     def get(self, kind: str, *parts: str) -> str | None:
         if not self.enabled:
             return None
-        value = self._read(self._path(kind, parts)) if self._usable(create=False) else None
+        path = self._path(kind, parts)
+        usable = self._usable(create=False) and self._entry_dirs_usable(path, create=False)
+        value = self._read(path) if usable else None
         with self._lock:
             if value is None:
                 self.misses += 1
@@ -205,9 +228,8 @@ class DiskCache:
         path = self._path(kind, parts)
         data = zlib.compress(json.dumps({"value": value}).encode("ascii"))
         try:
-            if not self._usable(create=True):
+            if not (self._usable(create=True) and self._entry_dirs_usable(path, create=True)):
                 return
-            path.parent.mkdir(parents=True, exist_ok=True)
             write_atomically(path, data, mtime=self.clock())
         except OSError as e:
             # a cache that can't be written must never fail the analysis, nor log every file
@@ -251,9 +273,11 @@ class DiskCache:
                 break
             discard(path)
             total -= size
+        stamp = self.root / PRUNE_STAMP
         with contextlib.suppress(OSError):
-            stamp = self.root / PRUNE_STAMP
-            stamp.touch()
+            # made anew, not touched: a symbolic link put in its place is removed, not followed
+            discard(stamp)
+            os.close(os.open(stamp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
             os.utime(stamp, (now, now))
 
     def _path(self, kind: str, parts: tuple[str, ...]) -> Path:
@@ -266,7 +290,8 @@ class DiskCache:
         try:
             with open(os.open(path, READ_FLAGS), "rb") as handle:
                 info = os.fstat(handle.fileno())
-                if not own_file(info, current_uid()):
+                # Windows has no O_NOFOLLOW: there, opening a symbolic link opens its target
+                if stat.S_ISLNK(os.lstat(path).st_mode) or not own_file(info, current_uid()):
                     return None   # nobody else's file is ever served as an entry
                 expired = now - info.st_mtime > self.max_age_seconds
                 data = b"" if expired else handle.read()
@@ -304,26 +329,72 @@ class DiskCache:
             return self._checked
 
     def _check_directories(self, create: bool) -> None:
+        """Checks <dir> and <dir>/v1, making either private if others can use it too. If one
+        was, whatever is in <dir>/v1 may have been planted, so the cache's own files there are
+        deleted before any is used."""
         assert self.root is not None
+        uid = current_uid()
+        made_private = False
         for path in (self.root.parent, self.root):
             if create:
                 # private: the cache holds file contents, which may come from private repositories
                 path.mkdir(mode=PRIVATE_MODE, parents=True, exist_ok=True)
-            problem = directory_problem(path, current_uid())
+            problem = directory_problem(path, uid)
+            if problem is None and others_can_use(path, uid):
+                made_private = True
+                problem = make_private(path)
             if problem is not None:
                 self._unsafe = True
-                log.warning("cache_dir_unsafe", path=str(path), problem=problem,
-                            hint="caching off for this run: use a CACHE_DIR of your own")
+                warn_unsafe(path, problem, fix="use a CACHE_DIR of your own")
                 return
+        if made_private:
+            self._clear()
         self._checked = True
+
+    def _entry_dirs_usable(self, path: Path, create: bool) -> bool:
+        """Whether <kind> and <kind>/<2 hex digits>, which hold the entry at `path`, are real
+        directories of the user's, after being made if `create`. Through a symbolic link, or in
+        someone else's directory, others could read entries or swap them, so either turns the
+        cache off for the run. Raises OSError if `create` and they can't be made."""
+        uid = current_uid()
+        for directory in (path.parent.parent, path.parent):
+            try:
+                if create:
+                    with contextlib.suppress(FileExistsError):
+                        directory.mkdir()
+                problem = directory_problem(directory, uid)
+            except OSError:
+                if create:
+                    raise
+                return False   # not made yet, so there's nothing to read
+            if problem is not None:
+                with self._lock:
+                    first, self._unsafe = not self._unsafe, True
+                if first:
+                    warn_unsafe(directory, problem, fix="delete it, or use another CACHE_DIR")
+                return False
+        return True
+
+    def _clear(self) -> None:
+        """Deletes the cache's own files: every entry and temporary file that prune() may delete,
+        whatever its age, and the prune stamp. A warning says how many went, if any did."""
+        assert self.root is not None
+        paths = [path for path, _ in self._entries()] + [self.root / PRUNE_STAMP]
+        deleted = sum(discard(path) for path in paths)
+        if deleted:
+            log.warning("cache_cleared", path=str(self.root), files=deleted,
+                        reason="others could use the cache folder until it was made private")
 
     def _prune_due(self) -> bool:
         assert self.root is not None
         try:
-            last = (self.root / PRUNE_STAMP).stat().st_mtime
+            info = os.lstat(self.root / PRUNE_STAMP)
         except OSError:
             return True
-        return self.clock() - last > PRUNE_INTERVAL_SECONDS
+        # a stamp that isn't the cache's own file, such as a planted link, can't put pruning off
+        if not own_file(info, current_uid()):
+            return True
+        return self.clock() - info.st_mtime > PRUNE_INTERVAL_SECONDS
 
     def _entries(self) -> Iterator[tuple[Path, os.stat_result]]:
         """The entry and temporary files in <kind>/<2 hex digits>/, with their lstat: the only
@@ -355,9 +426,13 @@ def write_atomically(path: Path, data: bytes, mtime: float) -> None:
         raise
 
 
-def discard(path: Path) -> None:
-    with contextlib.suppress(OSError):
+def discard(path: Path) -> bool:
+    """Deletes the file at `path` (a symbolic link itself, not its target): whether it went."""
+    try:
         path.unlink()
+    except OSError:
+        return False
+    return True
 
 
 def open_cache(enabled: bool = True) -> DiskCache:
