@@ -375,6 +375,19 @@ Only MEDIUM, HIGH and CRITICAL findings get inline comments (or the severities f
 
 ---
 
+## Releasing
+
+Maintainers publish to PyPI by pushing a version tag; `.github/workflows/release.yml` does the rest:
+
+1. Set the new `version` in `pr-analyzer/pyproject.toml` and merge it to `main`.
+2. Tag that commit and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
+
+The workflow stops if the tag doesn't match the version, then runs the tests, builds the wheel and sdist, checks them with `twine check --strict`, installs the wheel and runs it, and publishes with PyPI Trusted Publishing, so no API token is stored anywhere. Running the workflow by hand (Actions → Release → Run workflow) publishes the build to TestPyPI instead, as a rehearsal; TestPyPI refuses a version it already has.
+
+One-time setup: on PyPI, add a trusted publisher for the project `pranalyzer` with owner `Quantumstringfloops`, repository `PRanalyzer`, workflow `release.yml` and environment `pypi`; do the same on TestPyPI with environment `testpypi`. Then create both environments under the repository's *Settings → Environments*. Required reviewers on `pypi` make every release wait for an approval.
+
+---
+
 ## License
 
 MIT. See [LICENSE](https://github.com/Quantumstringfloops/PRanalyzer/blob/main/LICENSE).
