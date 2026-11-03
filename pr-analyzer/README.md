@@ -188,7 +188,7 @@ The pattern rules read one added line at a time and tell code, string literals a
 - The secret rules read the whole line, strings and comments included, since that is where secrets end up.
 - `magic-number` skips numbers that are already named or explain themselves: a keyword argument or default value (`timeout=30`), an assignment (`retries = 5`), a dict key or object property (`"port": 8080`, `{ port: 8080 }`), a constant definition (`MAX_SIZE = 10`), a slice or index (`line[:72]`), a line about a version (`sys.version_info >= (3, 11)`), and well-known values: 10, 100 and 1000; 24, 60, 3600 and 86400; powers of two from 16 to 65536, 255 and 65535; ports 80 and 443; and the standard HTTP status codes. Test files are skipped.
 
-Because each line is read on its own, the middle lines of a multi-line string (a docstring, a template literal) or of a `/* */` comment are read as code unless they start like a comment (`*`, `#`, `//`), and JavaScript regex literals aren't recognised.
+Because each line is read on its own, the middle lines of a multi-line string (a docstring, a template literal) or of a `/* */` comment are read as code unless they start like a comment (`*`, `#`, `//`), and JavaScript regex literals aren't recognised. In a line with more than 20 `{...}` or `${...}` fields nested in one another, everything from the 21st field on is read as code, string text included, so nothing there goes unchecked.
 
 ### Project configuration (`.pr-analyzer.toml`)
 

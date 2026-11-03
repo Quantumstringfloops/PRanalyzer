@@ -212,6 +212,14 @@ def test_todo_in_docstrings_and_comment_bodies(line, filename):
     # only # and // comments used to count, so these notes went unreported
     assert rules_for(line, filename) == ["todo-comment"]
 
+@pytest.mark.parametrize("line, filename, rule", [
+    ('f"{' * 21 + "x" + '}"' * 21 + ";print(y)", "calc.py", "print-call"),
+    ("`${" * 21 + "x" + "}`" * 21 + ";console.log(y)", "view.js", "console-log"),
+])
+def test_a_call_after_fields_nested_too_deep_is_still_flagged(line, filename, rule):
+    # past 20 nested fields the rest of the line used to be blanked, hiding the call
+    assert rule in rules_for(line, filename)
+
 # ── magic numbers ─────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("line, filename", [
     ("requests.get(url, timeout=25)", "app.py"),         # a keyword argument names it

@@ -13,6 +13,7 @@ In the code view a string keeps its quotes and prefix but its contents become sp
 SQL-injection rule, still see it. The replacement fields of an f-string or a template literal are
 code, so they stay; only the text around them, and a format spec, is blanked
 (`f"id {run(x):>8}"` -> `f"   {run(x)    }"`, `` `a ${run(b)}` `` -> `` `  ${run(b)}` ``).
+Past MAX_NESTING fields nested in one another, the rest of the line is kept as code, text and all.
 
 Python, JavaScript/TypeScript and C-family files are lexed; for any other language both views are
 the whole line, which is how every rule matched before. Some lines are comments as a whole: a line
@@ -33,7 +34,8 @@ from dataclasses import dataclass, field, replace
 
 COMMENT_PREFIXES = ("#", "//", "/*", "*")
 # replacement fields nested deeper than this (never seen in real code) end the lexing of a line,
-# so a crafted line can't exhaust the recursion limit
+# so a crafted line can't exhaust the recursion limit. The rest of the line is kept as code, so
+# nothing in it, such as a call after the string, goes unchecked.
 MAX_NESTING = 20
 
 _STRING = r'"(?:\\(?:.|$)|[^"\\])*(?:"|$)'          # an unclosed string runs to the end of the line
@@ -44,7 +46,6 @@ _BLOCK_COMMENT = r"/\*.*?(?:\*/|$)"
 _BRACKETS = r"|(?P<open>[(\[{])|(?P<close>[)\]}])"
 # a format spec is text up to the end of its field, apart from the fields nested in it
 _FORMAT_SPEC = re.compile(r"[^{}]*")
-_REST_OF_LINE = re.compile(r".*")
 
 
 @dataclass(frozen=True)
@@ -227,8 +228,9 @@ class _Lexer:
     def lex_field(self, pos: int) -> int:
         """Lex a replacement field from just after its opener: its code, then in Python its
         format spec, up to and including the closing brace. Returns where the field ends."""
-        if self.nesting == MAX_NESTING:   # the rest of the line counts as text
-            return self.skip_text(_REST_OF_LINE, pos)
+        if self.nesting == MAX_NESTING:   # the rest of the line counts as code, hiding nothing
+            self.keep_code(self.text[pos:])
+            return len(self.text)
         self.nesting += 1
         pos = self.lex_code(pos, in_field=True)
         if self.text.startswith(":", pos):

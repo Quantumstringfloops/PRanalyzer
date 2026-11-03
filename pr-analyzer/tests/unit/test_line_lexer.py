@@ -85,6 +85,14 @@ def test_a_comment_inside_a_field_is_a_comment():
 def test_deeply_nested_fields_do_not_exhaust_the_stack(line, extension):
     assert len(split_line(line, extension).code) == len(line)
 
+@pytest.mark.parametrize("line, extension", [
+    ('f"{' * 21 + "x" + '}"' * 21 + ";eval(y)", ".py"),   # pr-analyzer: ignore
+    ("`${" * 21 + "x" + "}`" * 21 + ";eval(y)", ".js"),   # pr-analyzer: ignore
+])
+def test_past_the_nesting_limit_the_rest_of_the_line_is_code(line, extension):
+    # the rest of the line used to be blanked, so the eval after the string went unreported
+    assert split_line(line, extension) == LineParts(line, blanks(len(line)))
+
 # ── JavaScript / TypeScript ───────────────────────────────────────────────────
 @pytest.mark.parametrize("line, code, comments", [
     ("foo();  // console.log(x)", "foo();", "// console.log(x)"),
