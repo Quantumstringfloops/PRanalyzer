@@ -99,7 +99,7 @@ pr-analyzer version
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--skip-llm` | off | Run the static and security checks only |
-| `--post-review` | off | Post the result as a GitHub review: inline comments for MEDIUM and above, LOW findings counted in the summary (needs a token that can write pull requests) |
+| `--post-review` | off | Post the result as a GitHub review: inline comments for MEDIUM and above, LOW findings counted in the summary. Later runs on the same PR update that summary and comment only on new findings (needs a token that can write pull requests) |
 | `--fail-on-block` / `--no-fail-on-block` | on | Exit with code 1 when the PR is blocked |
 | `--output`, `-o` | `rich` | `rich`, `json` or `markdown`. Reports go to stdout, logs to stderr |
 | `--verbose`, `-v` | off | Show progress logs |
@@ -245,7 +245,7 @@ The scanners are optional. Install them with `poetry install --extras "security"
 Start Ollama and pull the model (`ollama pull llama3.2`), point `LLM_PROVIDER` at OpenAI or Anthropic, or pass `--skip-llm`.
 
 **Bot posts no inline comments**
-Only MEDIUM, HIGH and CRITICAL findings get inline comments, and only on lines that are part of the diff. Other findings at those levels are listed in the review body, and LOW findings are counted there by rule. If GitHub rejects the inline comments, the summary is still posted. PRs from forks can't be reviewed from Actions (read-only token, no secrets).
+Only MEDIUM, HIGH and CRITICAL findings get inline comments, and only on lines that are part of the diff. Other findings at those levels are listed in the review body, and LOW findings are counted there by rule. A finding that already has a comment isn't commented on again when the PR is re-analysed. If GitHub rejects the inline comments, the summary is still posted. PRs from forks can't be reviewed from Actions (read-only token, no secrets).
 
 ---
 

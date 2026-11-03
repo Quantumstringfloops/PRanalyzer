@@ -4,8 +4,9 @@ from urllib.parse import urlsplit
 import requests
 import structlog
 from github import Auth, Github, GithubException, RateLimitExceededException
-from github.GithubObject import NotSet
-from github.PullRequest import ReviewComment
+from github.Commit import Commit
+from github.GithubObject import NotSet, Opt
+from github.PullRequest import PullRequest, ReviewComment
 from urllib3.util.retry import Retry
 
 from pr_analyzer.config import settings
@@ -25,6 +26,8 @@ log = structlog.get_logger(__name__)
 GITHUB_HOSTS = {"github.com", "www.github.com"}
 # PR pages people copy URLs from: /pull/123, /pull/123/files, /pull/123/commits, /pull/123/checks
 PR_SUBPAGES = {"files", "commits", "checks"}
+# hidden tag on the summary review, so a later run can find and update it
+REVIEW_MARKER = "<!-- pr-analyzer -->"
 
 
 class GithubClient:
@@ -165,26 +168,28 @@ class GithubClient:
             }
             for suggestion, line in comments
         ]
+        summary = f"{body}\n\n{REVIEW_MARKER}"
 
         try:
             repo = self.git_instance.get_repo(pr.repo)
             pull = repo.get_pull(pr.number)
             # pin the review to the analysed commit so line numbers match even if the PR moved on
             commit = repo.get_commit(pr.head_sha) if pr.head_sha else NotSet
-            try:
-                pull.create_review(commit=commit, body=body, event="COMMENT", comments=review_comments)
-            except GithubException as e:
-                if e.status != 422 or not review_comments:
-                    raise
-                # GitHub rejects the whole review if any inline comment falls outside the diff;
-                # post the summary alone rather than nothing
-                log.warning("inline_comments_rejected", error=str(e.data))
-                pull.create_review(
-                    commit=commit,
-                    body=body + "\n\n_Inline comments could not be attached to this diff._",
-                    event="COMMENT",
-                )
-                review_comments = []
+
+            # every push re-runs the analysis, and each run used to add a whole new review that
+            # repeated every comment. Skip findings already commented on (GitHub clears `line`
+            # once the code under a comment changes, so those get a fresh comment) and update the
+            # earlier summary in place.
+            posted = {(c.path, c.line, c.body.strip()) for c in pull.get_review_comments()}
+            review_comments = [
+                c for c in review_comments if (c["path"], c["line"], c["body"].strip()) not in posted
+            ]
+            if not self._update_summary(pull, summary):
+                review_comments = self._create_review(pull, commit, summary, review_comments)
+            elif review_comments:
+                note = (f"**pr-analyzer:** {len(review_comments)} new finding(s) since the last run. "
+                        f"The summary in its earlier review is kept up to date.")
+                review_comments = self._create_review(pull, commit, note, review_comments)
         except RateLimitExceededException as e:
             raise RateLimitError(self._reset_time(e)) from e
         except GithubException as e:
@@ -193,6 +198,42 @@ class GithubClient:
             raise PRAnalyzerError(f"Could not reach GitHub: {e}") from e
 
         log.info("review_posted", pr=pr.number, comments=len(review_comments))
+
+    @staticmethod
+    def _update_summary(pull: PullRequest, summary: str) -> bool:
+        """Edit the summary review an earlier run posted; False if there's none this token may edit."""
+        # newest first: when several accounts run pr-analyzer on a PR, only our own review is editable
+        for review in reversed(list(pull.get_reviews())):
+            if REVIEW_MARKER not in (review.body or ""):
+                continue
+            try:
+                review.edit(summary)
+                return True
+            except GithubException as e:
+                if e.status not in (403, 404):
+                    raise
+        return False
+
+    @staticmethod
+    def _create_review(
+        pull: PullRequest, commit: Opt[Commit], body: str, comments: list[ReviewComment]
+    ) -> list[ReviewComment]:
+        """Post a review and return the inline comments that went with it."""
+        try:
+            pull.create_review(commit=commit, body=body, event="COMMENT", comments=comments)
+            return comments
+        except GithubException as e:
+            if e.status != 422 or not comments:
+                raise
+            # GitHub rejects the whole review if any inline comment falls outside the diff;
+            # post the text alone rather than nothing
+            log.warning("inline_comments_rejected", error=str(e.data))
+            pull.create_review(
+                commit=commit,
+                body=body + "\n\n_Inline comments could not be attached to this diff._",
+                event="COMMENT",
+            )
+            return []
 
     @staticmethod
     def _map_error(e: GithubException, repo_name: str) -> PRAnalyzerError:

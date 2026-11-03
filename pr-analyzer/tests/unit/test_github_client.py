@@ -210,3 +210,70 @@ def test_post_review_falls_back_to_summary_when_comments_rejected(github):
 def test_post_review_needs_token():
     with pytest.raises(InvalidTokenError):
         GithubClient(token="").post_review(make_pr_summary(), "body", [])
+
+# ── repeat runs on the same PR ────────────────────────────────────────────────
+MARKER = "<!-- pr-analyzer -->"
+
+def finding(title="Risky call", line=3):
+    return Suggestion(filename="app.py", severity="HIGH", category="security",
+                      title=title, description="Details.", line=line)
+
+def posted_comment(title="Risky call", line=3):
+    return SimpleNamespace(path="app.py", line=line, body=f"**HIGH** — {title}\n\nDetails.")
+
+def test_first_run_posts_a_tagged_summary_with_its_comments(github):
+    GithubClient(token="t").post_review(make_pr_summary(), "summary", [(finding(), 3)])
+
+    kwargs = github.pr.create_review.call_args.kwargs
+    assert kwargs["body"] == f"summary\n\n{MARKER}"
+    assert [c["line"] for c in kwargs["comments"]] == [3]
+
+def test_rerun_updates_the_summary_instead_of_adding_a_review(github):
+    # every push used to add a whole new review that repeated every comment
+    earlier = MagicMock(body=f"old summary\n\n{MARKER}")
+    github.pr.get_reviews.return_value = [earlier]
+    github.pr.get_review_comments.return_value = [posted_comment()]
+
+    GithubClient(token="t").post_review(make_pr_summary(), "new summary", [(finding(), 3)])
+
+    earlier.edit.assert_called_once_with(f"new summary\n\n{MARKER}")
+    github.pr.create_review.assert_not_called()
+
+def test_rerun_comments_only_on_new_findings(github):
+    github.pr.get_reviews.return_value = [MagicMock(body=f"old\n\n{MARKER}")]
+    github.pr.get_review_comments.return_value = [posted_comment()]
+
+    GithubClient(token="t").post_review(
+        make_pr_summary(), "summary", [(finding(), 3), (finding("Other risk", 7), 7)]
+    )
+
+    kwargs = github.pr.create_review.call_args.kwargs
+    assert [c["line"] for c in kwargs["comments"]] == [7]
+    assert "1 new finding(s)" in kwargs["body"]
+
+def test_outdated_comments_do_not_count_as_posted(github):
+    # GitHub clears `line` on a comment once the code under it changes
+    github.pr.get_review_comments.return_value = [posted_comment(line=None)]
+
+    GithubClient(token="t").post_review(make_pr_summary(), "summary", [(finding(), 3)])
+
+    assert [c["line"] for c in github.pr.create_review.call_args.kwargs["comments"]] == [3]
+
+def test_reviews_without_the_tag_are_never_edited(github):
+    human = MagicMock(body="Looks good to me")
+    github.pr.get_reviews.return_value = [human]
+
+    GithubClient(token="t").post_review(make_pr_summary(), "summary", [])
+
+    human.edit.assert_not_called()
+    github.pr.create_review.assert_called_once()
+
+def test_summary_from_another_account_is_left_alone(github):
+    # someone else's pr-analyzer review can't be edited with this token; post our own instead
+    theirs = MagicMock(body=f"theirs\n\n{MARKER}")
+    theirs.edit.side_effect = GithubException(403, {"message": "Forbidden"}, {})
+    github.pr.get_reviews.return_value = [theirs]
+
+    GithubClient(token="t").post_review(make_pr_summary(), "mine", [])
+
+    assert github.pr.create_review.call_args.kwargs["body"] == f"mine\n\n{MARKER}"
