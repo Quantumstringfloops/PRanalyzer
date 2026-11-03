@@ -222,6 +222,60 @@ To tune individual Semgrep rules, point `SEMGREP_CONFIG` at your own ruleset.
 
 ---
 
+## Use it in GitHub Actions
+
+Add a workflow to the repository you want reviewed:
+
+```yaml
+# .github/workflows/pr-analyzer.yml
+name: PR Analyzer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read          # read the PR's files and the base branch's .pr-analyzer.toml
+      pull-requests: write    # post the review
+    steps:
+      - id: pr
+        uses: Quantumstringfloops/PRanalyzer@<commit-sha>   # pin a commit, as for any action
+        with:
+          llm-provider: openai                              # optional: leave out to skip the LLM
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          extras: security,openai
+```
+
+No checkout step is needed: the action reads the PR through the GitHub API and installs pr-analyzer from its own copy of this repository, so the action and the code always match.
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `github-token` | `github.token` | Reads the PR and posts the review |
+| `pr-url` | the PR that triggered the run | The pull request to analyse |
+| `llm-provider` | empty | `openai`, `anthropic` or `ollama`. Empty skips the LLM review; a provider without its key is skipped with a note in the review |
+| `llm-model` | the provider's default | Model to use |
+| `openai-api-key`, `anthropic-api-key` | empty | Pass a secret here |
+| `post-review` | `true` | Post the result as a review |
+| `fail-on-block` | `true` | Fail the step when the PR is blocked |
+| `config` | empty | A settings file in the workspace, used instead of the base branch's `.pr-analyzer.toml` (see below) |
+| `extras` | `security` | Comma-separated optional parts: `security`, `openai`, `anthropic` |
+| `python-version` | `3.12` | Python to run pr-analyzer with |
+
+**Outputs:** `score` (0–100), `grade` (`A+` to `F`) and `passed` (`true`/`false`), read from the JSON report, e.g. `${{ steps.pr.outputs.grade }}`.
+
+- The action runs on Linux and macOS runners.
+- On `pull_request`, PRs from forks get a read-only token and no secrets, so the review can't be posted; skip them with `if: github.event.pull_request.head.repo.full_name == github.repository` on the job, as this repository's own workflow does.
+- With `llm-provider: ollama`, set `OLLAMA_URL` in the step's `env:`.
+- `config` reads a file from the workspace. If the job checks out the PR, that is the PR's own code, which could loosen its own checks, so prefer the base branch's `.pr-analyzer.toml` unless the file comes from somewhere the PR can't change.
+- pr-analyzer runs outside the workspace, so a `.env` file in the PR can't change its settings, and the log can't be fed workflow commands by text from the PR.
+
+---
+
 ## Sample Output
 
 ```
