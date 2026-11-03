@@ -13,7 +13,10 @@
 
 Every key is optional. When a PR is analysed the file is read from the PR's base branch, never
 from the PR itself, so a PR can't loosen its own checks; `--config PATH` names a local file
-instead. A missing file means the defaults; an invalid one is an error that names every problem.
+instead. A missing file means the defaults. An invalid --config file is an error that names every
+problem. An invalid file on the base branch is ignored for the defaults, with a warning, so it
+can't stop every PR, the one that fixes it included; and a PR that adds or changes the file has
+its copy checked, never applied, each problem a finding (CONFIG_RULE) that blocks it.
 """
 import dataclasses
 import difflib
@@ -30,20 +33,41 @@ from pr_analyzer.analyzer import ast_analyzer
 from pr_analyzer.analyzer.ast_analyzer import Thresholds
 from pr_analyzer.exceptions import ConfigError
 from pr_analyzer.llm.engine import LLM_RULE
+from pr_analyzer.models import Suggestion
 from pr_analyzer.security import scanner
 
 CONFIG_FILE = ".pr-analyzer.toml"
+# the rule id of problems in the copy of CONFIG_FILE that a PR adds or changes
+CONFIG_RULE = "config"
 
 # lowest first, so a severity's position is its rank
 SEVERITIES = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
-RULE_IDS = frozenset(ast_analyzer.RULE_IDS + scanner.RULE_IDS + (LLM_RULE,))
+RULE_IDS = frozenset(ast_analyzer.RULE_IDS + scanner.RULE_IDS + (LLM_RULE, CONFIG_RULE))
 KEYS = ("disable", "ignore_paths", "block_on", "inline_min_severity", "thresholds")
 THRESHOLD_KEYS = tuple(f.name for f in dataclasses.fields(Thresholds))
 
-# gitignore-style wildcards: `**/` is any number of directories, `**` anything, `*` and `?` stay
-# within one path segment; everything else is literal
-_GLOB_TOKEN = re.compile(r"\*\*/|\*\*|\*|\?|[^*?]+")
-_GLOB_PARTS = {"**/": "(?:.*/)?", "**": ".*", "*": "[^/]*", "?": "[^/]"}
+# The part of .gitignore's syntax that ignore_paths supports, matched as git matches it: `*` and
+# `?` stay within one path segment, and `**` as a whole segment crosses directories (`**/` any
+# number of them, a final `/**` everything inside); any other run of asterisks is a `*`, and
+# everything else is literal. The syntax in _UNSUPPORTED is rejected instead.
+_GLOB_TOKEN = re.compile(
+    r"(?P<dirs>(?:\A|(?<=/))\*{2,}/)|(?P<rest>(?:\A|(?<=/))\*{2,}\Z)|(?P<star>\*+)|(?P<one>\?)"
+    r"|[^*?]+"
+)
+_GLOB_PARTS = {"dirs": "(?:.*/)?", "rest": ".*", "star": "[^/]*", "one": "[^/]"}
+# syntax that git reads differently from the literal text glob_regex would make of it
+_UNSUPPORTED = (
+    (re.compile(r"\A!"), "uses negation (a leading !), which isn't supported: ignore_paths can "
+                         "only leave files out"),
+    (re.compile(r"[\[\]]"), "uses [ or ] (a character class in git), which isn't supported: "
+                            "list each name, or use ? for any one character"),
+    (re.compile(r"\\"), "uses a backslash, which isn't supported: there are no escapes, and / "
+                        "separates directories"),
+    # git's own matcher treats foo**/bar inconsistently: across directories or within one
+    (re.compile(r"[^/*]\*{2,}/[^/]"), "has ** inside a name before a /, which isn't supported: "
+                                      "write foo*/bar for one directory, or foo*/**/bar for any "
+                                      "number"),
+)
 
 
 @dataclass(frozen=True)
@@ -64,13 +88,16 @@ class ProjectConfig:
 
 @lru_cache(maxsize=None)
 def glob_regex(pattern: str) -> re.Pattern[str]:
-    """Match repo paths the way .gitignore does: a pattern with no `/` except a trailing one
-    matches at any depth, one with a leading or inner `/` only from the repository root, and a
-    pattern that matches a directory covers every file below it."""
+    """Match repo paths the way .gitignore does, for the syntax ignore_paths accepts: a pattern
+    with no `/` except a trailing one matches at any depth, one with a leading or inner `/` only
+    from the repository root, a trailing `/` only directories, and a pattern that matches a
+    directory covers every file below it."""
     anchored = "/" in pattern.rstrip("/")
     directory_only = pattern.endswith("/")
-    tokens = _GLOB_TOKEN.findall(pattern.strip("/"))
-    body = "".join(_GLOB_PARTS.get(token, re.escape(token)) for token in tokens)
+    body = "".join(
+        _GLOB_PARTS[token.lastgroup] if token.lastgroup else re.escape(token.group())
+        for token in _GLOB_TOKEN.finditer(pattern.strip("/"))
+    )
     prefix = "" if anchored else "(?:.*/)?"
     suffix = "/.*" if directory_only else "(?:/.*)?"
     return re.compile(prefix + body + suffix)
@@ -93,19 +120,56 @@ def load_project_config(path: str | Path) -> ProjectConfig:
 
 
 def parse_project_config(raw: bytes | str, source: str = CONFIG_FILE) -> ProjectConfig:
+    """Settings the run must use, such as a --config file: any problem is an error naming all."""
+    config, problems = read_project_config(raw)
+    if problems:
+        raise ConfigError(f"{source} is invalid:\n" + "\n".join(f"  - {p}" for p in problems))
+    return config
+
+
+def read_project_config(raw: bytes | str) -> tuple[ProjectConfig, list[str]]:
+    """The settings in a file and every problem with it. With any problem the settings are the
+    defaults: the valid part of a broken file isn't what the project chose either."""
     try:
         text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
         data = tomllib.loads(text)
-    except UnicodeDecodeError as e:
-        raise ConfigError(f"{source} is not UTF-8 text") from e
+    except UnicodeDecodeError:
+        return ProjectConfig(), ["the file is not UTF-8 text"]
     except tomllib.TOMLDecodeError as e:
-        raise ConfigError(f"{source} is not valid TOML: {e}") from e
+        return ProjectConfig(), [f"the file is not valid TOML: {e}"]
 
     problems: list[str] = []
     values = _validate(data, problems)
-    if problems:
-        raise ConfigError(f"{source} is invalid:\n" + "\n".join(f"  - {p}" for p in problems))
-    return ProjectConfig(**values)
+    return (ProjectConfig() if problems else ProjectConfig(**values)), problems
+
+
+def config_findings(text: str) -> list[Suggestion]:
+    """A HIGH finding for each problem in the copy of CONFIG_FILE that a PR adds or changes. The
+    copy is only checked, never applied; once merged, an invalid file is ignored on every PR until
+    it is fixed, so its problems block the PR that brings them in."""
+    _, problems = read_project_config(text)
+    if "\ufffd" in text:
+        # a PR's files arrive as text, with U+FFFD where the bytes weren't UTF-8; read as bytes
+        # from the base branch once merged, such a file is rejected outright
+        problems.insert(0, "the file has U+FFFD replacement characters, so it is probably not "
+                           "UTF-8 text")
+    return [
+        Suggestion(
+            filename=CONFIG_FILE,
+            severity="HIGH",
+            category="style",
+            title=f"Invalid config: {problem}",
+            description=(
+                f"This PR's {CONFIG_FILE} is invalid: {problem}. A PR's copy of the file is only "
+                "checked, never applied. Once merged, an invalid file is ignored, and every PR is "
+                "analysed with the default settings until it is fixed."
+            ),
+            line=None,
+            source="static",
+            rule_id=CONFIG_RULE,
+        )
+        for problem in problems
+    ]
 
 
 def _validate(data: dict[str, Any], problems: list[str]) -> dict[str, Any]:
@@ -153,8 +217,17 @@ def _rule_ids(value: Any, problems: list[str]) -> list[str]:
 
 def _ignore_paths(value: Any, problems: list[str]) -> list[str]:
     patterns = _strings("ignore_paths", value, problems)
-    problems += [f"ignore_paths: {p!r} is not a path pattern" for p in patterns if not p.strip("/")]
-    return [p for p in patterns if p.strip("/")]
+    found = {pattern: _pattern_problems(pattern) for pattern in patterns}
+    problems += [f"ignore_paths: {p!r} {why}" for p, whys in found.items() for why in whys]
+    return [p for p in patterns if not found[p]]
+
+
+def _pattern_problems(pattern: str) -> list[str]:
+    if not pattern.strip("/"):
+        return ["is not a path pattern"]
+    # rejected rather than read literally: each would quietly match something other than what
+    # the same line does in a .gitignore
+    return [why for syntax, why in _UNSUPPORTED if syntax.search(pattern)]
 
 
 def _severity(key: str, value: Any, problems: list[str]) -> str:

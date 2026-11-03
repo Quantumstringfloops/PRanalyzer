@@ -63,7 +63,8 @@ def error_messages(e: PRAnalyzerError) -> tuple[str, ...]:
         # bad URL format — user typed the wrong kind of URL
         return (f"Invalid URL: {e}",)
     if isinstance(e, ConfigError):
-        # --config or the base branch's .pr-analyzer.toml is invalid; e lists every problem
+        # the --config file can't be read or is invalid; e lists every problem. An invalid
+        # .pr-analyzer.toml on the base branch only gets a warning (see pipeline.py)
         return (f"Configuration error: {e}",)
     if isinstance(e, InvalidTokenError):
         # token is wrong, expired or missing

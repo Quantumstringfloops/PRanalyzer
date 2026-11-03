@@ -176,17 +176,35 @@ max_line_length = 120    # longer added lines get a long-line finding
 
 The values shown are the defaults. Severities can be written in any case.
 
-**Where it is read from.** When a PR is analysed, `.pr-analyzer.toml` is read from the PR's **base branch** through the GitHub API, never from the PR itself, so a PR can't loosen its own checks; a change to the file takes effect once it is merged. A file in the current directory is never picked up (in CI that is the PR's own checkout). `--config PATH` uses a local file instead. No file means the defaults.
+**Where it is read from.** When a PR is analysed, `.pr-analyzer.toml` is read from the PR's **base branch** through the GitHub API, never from the PR itself, so a PR can't loosen its own checks; a change to the file takes effect once it is merged, and until then the PR's copy is only checked (see below). A file in the current directory is never picked up (in CI that is the PR's own checkout). `--config PATH` uses a local file instead. No file means the defaults.
 
-**Validation.** Unknown keys, unknown rule ids, bad severities and thresholds that aren't positive whole numbers are errors: the run stops with exit code 2 and a message listing every problem, with a suggestion for likely typos:
+**Validation.** Unknown keys, unknown rule ids, bad severities, unsupported `ignore_paths` patterns and thresholds that aren't positive whole numbers make the file invalid. Every problem is named, with a suggestion for likely typos, and what happens next depends on where the file came from:
 
-```
-Configuration error: .pr-analyzer.toml on main is invalid:
-  - unknown key 'disabel' (did you mean 'disable'?)
-  - disable: unknown rule id 'magic-numbers' (did you mean 'magic-number'?)
-```
+- **A PR that adds or changes `.pr-analyzer.toml`** has its copy checked, though not applied: each problem is a HIGH finding on the file, with the rule id `config`, so with the default `block_on` the PR is blocked until the file is valid. The check runs whatever `ignore_paths` says; `disable = ["config"]` on the base branch turns it off.
+- **An invalid file on the base branch** doesn't stop the run. The file is ignored, the PR is analysed with the default settings, and a warning names the problems in the report, in the review's notes and on stderr:
 
-**`ignore_paths` patterns** work like `.gitignore`: `*` and `?` match within one directory and `**` across directories; a pattern with no `/` (like `*.min.js`) matches in every directory, one with a leading or inner `/` (like `docs/**` or `/setup.py`) only from the repository root, a trailing `/` matches a directory, and a pattern that matches a directory covers every file in it. The report notes which files were skipped.
+  ```
+  .pr-analyzer.toml on main is invalid, so the default settings were used: disable: unknown rule id 'magic-numbers' (did you mean 'magic-number'?)
+  ```
+
+  To recover, fix the file in a PR to that branch. That PR is analysed with the defaults like any other, and its copy of the file is checked; once it is merged, the project's settings apply again.
+- **An invalid `--config` file** stops the run with exit code 2 before anything is fetched:
+
+  ```
+  Configuration error: settings.toml is invalid:
+    - unknown key 'disabel' (did you mean 'disable'?)
+    - disable: unknown rule id 'magic-numbers' (did you mean 'magic-number'?)
+  ```
+
+**`ignore_paths` patterns** use a subset of `.gitignore` syntax, matched the way git matches it:
+
+- `*` matches any run of characters within one path segment, and `?` any one character except `/`.
+- `**` as a whole path segment crosses directories: `**/` at the start or `/**/` in the middle stands for any number of directories, including none, and `/**` at the end for everything inside. Within a name, `**` is the same as `*`, so `**.min.js` means `*.min.js`.
+- A pattern with no `/` except at the end (like `*.min.js` or `vendor/`) matches in every directory; one with a leading or inner `/` (like `/setup.py` or `docs/**`) only from the repository root.
+- A trailing `/` matches directories only, and a pattern that matches a directory covers every file in it.
+- Every other character matches itself, case-sensitively, `#` and spaces included (a `.gitignore` would read a leading `#` as a comment and drop trailing spaces).
+
+Negation (a leading `!`), `[` and `]` (character classes), backslashes (escapes) and `**` inside a name before a `/` (like `foo**/bar`, which git itself reads inconsistently) make the file invalid, rather than silently matching something other than what a `.gitignore` would. The report notes which files were skipped.
 
 **Rule ids.** Each finding's id is in the JSON report (`"rule"`), and the review summary shows it next to each counted rule.
 
@@ -218,6 +236,7 @@ Configuration error: .pr-analyzer.toml on main is invalid:
 | `semgrep` | the whole Semgrep scan | per Semgrep rule | changed files |
 | `dependency-audit` | the whole pip-audit check | HIGH | `requirements*.txt` |
 | `llm` | the whole LLM review | per suggestion | the diff |
+| `config` | a problem in the copy of `.pr-analyzer.toml` a PR adds or changes | HIGH | `.pr-analyzer.toml` |
 
 To tune individual Semgrep rules, point `SEMGREP_CONFIG` at your own ruleset.
 

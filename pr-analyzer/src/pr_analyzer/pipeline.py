@@ -16,8 +16,10 @@ from pr_analyzer.llm.engine import LLM_RULE, LLMEngine
 from pr_analyzer.models import AnalysisResult, FileChange, PRSummary, Suggestion
 from pr_analyzer.project_config import (
     CONFIG_FILE,
+    CONFIG_RULE,
     ProjectConfig,
-    parse_project_config,
+    config_findings,
+    read_project_config,
     severity_rank,
 )
 from pr_analyzer.security.scanner import SecurityScanner
@@ -42,6 +44,25 @@ def skipped_files_warning(skipped: list[FileChange]) -> str:
     if len(skipped) > MAX_LISTED_SKIPPED:
         names += f" and {len(skipped) - MAX_LISTED_SKIPPED} more"
     return f"Skipped {len(skipped)} file(s) matching ignore_paths in {CONFIG_FILE}: {names}"
+
+
+def invalid_config_warning(source: str, problems: list[str]) -> str:
+    return f"{source} is invalid, so the default settings were used: " + "; ".join(problems)
+
+
+def check_pr_config(pr: PRSummary, warnings: list[str]) -> list[Suggestion]:
+    """Findings for the problems in the .pr-analyzer.toml this PR adds or changes, if any. That
+    copy is checked whatever ignore_paths says, and never applied (see _project_config_for)."""
+    changed = next(
+        (f for f in pr.files if f.filename == CONFIG_FILE and f.status != "removed"), None
+    )
+    if changed is None:
+        return []
+    if changed.raw_content is None:
+        warnings.append(f"Could not check the {CONFIG_FILE} this PR changes: its content "
+                        "isn't available")
+        return []
+    return config_findings(changed.raw_content)
 
 
 def findings_off_the_diff(findings: list[Suggestion]) -> list[str]:
@@ -108,7 +129,9 @@ class AnalysisPipeline:
         pr = self.github.fetch_pr(url)
         log.info("PR fetched successfully", repo=pr.repo, number=pr.number, files=len(pr.files))
 
-        config = self._project_config_for(pr)
+        config = self._project_config_for(pr, warnings)
+        # a broken .pr-analyzer.toml in the PR blocks it, so it can't be merged unnoticed
+        pr_config_findings = check_pr_config(pr, warnings) if config.enabled(CONFIG_RULE) else []
         # files matching ignore_paths aren't analysed at all, so they never reach the LLM either
         skipped = [f for f in pr.files if config.ignores(f.filename)]
         files = [f for f in pr.files if not config.ignores(f.filename)]
@@ -146,7 +169,9 @@ class AnalysisPipeline:
         if ignored:
             warnings.append(ignored_warning(ignored))
 
-        all_suggestions = existing_findings + llm_suggestions
+        # the config findings carry text from the PR, so they stay out of the LLM's prompt; and
+        # with no line, no ignore marker can drop them
+        all_suggestions = pr_config_findings + existing_findings + llm_suggestions
 
         log.info("Scoring: ")
         score = self.scorer.score(all_suggestions, block_on=config.block_on)
@@ -171,16 +196,24 @@ class AnalysisPipeline:
         )
         return result
 
-    def _project_config_for(self, pr: PRSummary) -> ProjectConfig:
-        # --config wins; otherwise the copy on the PR's base branch, never the PR's own, so a PR
-        # can't loosen its own checks. No file there means the defaults.
+    def _project_config_for(self, pr: PRSummary, warnings: list[str]) -> ProjectConfig:
+        # --config wins (the CLI stops on an invalid one); otherwise the copy on the PR's base
+        # branch, never the PR's own, so a PR can't loosen its own checks. No file there means
+        # the defaults, and so does an invalid one, with a warning: stopping instead used to fail
+        # every PR until the file was fixed, the PR fixing it included.
         if self.project_config is not None:
             return self.project_config
         raw = self.github.fetch_file(pr.repo, CONFIG_FILE, pr.base_branch)
         if raw is None:
             return ProjectConfig()
+        config, problems = read_project_config(raw)
+        if problems:
+            warning = invalid_config_warning(f"{CONFIG_FILE} on {pr.base_branch}", problems)
+            log.warning("project_config_invalid", warning=warning)   # on stderr, as well
+            warnings.append(warning)
+            return ProjectConfig()
         log.info("project config loaded", file=CONFIG_FILE, ref=pr.base_branch)
-        return parse_project_config(raw, source=f"{CONFIG_FILE} on {pr.base_branch}")
+        return config
 
     def _post_github_review(self, result: AnalysisResult, min_severity: str = "MEDIUM") -> None:
         comments = self._review_comments(result, min_severity)
