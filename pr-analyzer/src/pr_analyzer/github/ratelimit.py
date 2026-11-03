@@ -55,6 +55,11 @@ DEFAULT_MAX_WAIT_SECONDS = 60.0
 # transient server errors, retried on idempotent requests only
 SERVER_ERRORS = (500, 502, 503, 504)
 MAX_RETRIES = 3
+# The longest a wait blocks at a time. On Windows, Python 3.11-3.13 can't interrupt an Event wait
+# the way it interrupts time.sleep (bpo-29971): Ctrl-C raises KeyboardInterrupt on the main thread
+# only once the wait returns, which in slices this long is within half a second. Elsewhere Ctrl-C
+# still cuts a slice short at once.
+WAIT_SLICE_SECONDS = 0.5
 
 
 def lowercase(headers: Mapping[str, str]) -> dict[str, str]:
@@ -137,9 +142,10 @@ class RateLimitPause:
     request waits for a limit to reset, the others hold back instead of adding to it.
 
     Waits are on an Event rather than time.sleep, so cancel() ends them at once: Ctrl-C reaches
-    only the main thread, and nothing else could stop a worker thread's wait. Deadlines are on
-    the monotonic clock, which a change to the system time doesn't move; `clock` is the wall
-    clock that GitHub's reset times are read against."""
+    only the main thread, and nothing else could stop a worker thread's wait. They block for at
+    most WAIT_SLICE_SECONDS at a time, so that Ctrl-C on the main thread isn't held back on
+    Windows. Deadlines are on the monotonic clock, which a change to the system time doesn't
+    move; `clock` is the wall clock that GitHub's reset times are read against."""
 
     def __init__(
         self,
@@ -171,7 +177,11 @@ class RateLimitPause:
     def sleep(self, seconds: float) -> None:
         """Wait `seconds` without holding back other requests, unless cancel() comes first."""
         if seconds > 0 and not self.cancelled.is_set():
-            self.cancelled.wait(seconds)
+            until = self.monotonic() + seconds
+            remaining = seconds
+            # a slice at a time, each measured against the deadline, so no lateness adds up
+            while remaining > 0 and not self.cancelled.wait(min(remaining, WAIT_SLICE_SECONDS)):
+                remaining = until - self.monotonic()
         self.raise_if_cancelled()
 
     def wait(self, seconds: float, **context: Any) -> None:
