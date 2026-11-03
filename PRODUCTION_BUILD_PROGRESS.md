@@ -77,22 +77,51 @@ Permission to rewrite modules and the added scalability requirements don't chang
   - With real Semgrep, the local bot preview now predicts 79.0 (C+), passed, with 3 inline comments. The 4 Semgrep notes about movable tags are gone.
   - On PR #3 (`5318f56`), CI on Python 3.11 and 3.12 and the bot all passed, and GitHub no longer warns about Node 20. The bot edited its tagged summary to 79.0 (C+), and its 4 Semgrep comments now show as outdated.
 - 2026-11-03: **PR #3's description updated**, at the user's request, through the browser pane. It now covers the review fix, the pinned actions, 217 tests and the bot's actual result.
+- 2026-11-03: PR #3 was **merged by the user** (`3d567ef`). The user also revoked both leaked keys.
+- 2026-11-03: **Phase 1 (release and usability) and Phase 2 (scale and speed)**, at the user's request. Each phase was built by its own agent in its own worktree. The two were combined on `feat/release-and-scale` and merged to `main` as PR #4 (`e7e06c5`; the user merged it).
+  - Phase 1 delivered:
+    - PyPI packaging (MIT) and a release workflow with Trusted Publishing;
+    - a composite GitHub Action, which the repo's PR bot now uses;
+    - `.pr-analyzer.toml` project config with rule ids;
+    - a per-line lexer: precision on a labelled sample rose from about 9% to 73–85%;
+    - neutralised bot text and a fenced LLM prompt.
+  - Phase 2 delivered:
+    - parallel GitHub fetching: 17.5 s → 4.1 s on a real 27-file PR;
+    - capped rate-limit waits;
+    - chunked LLM review within a token budget;
+    - an on-disk cache: 0.8 s and 3 requests on a repeat run.
+  - On PR #4, CI and the Action's first real run passed, at 95.8 (A).
+- 2026-11-03: **Review, then fixes.**
+  - Two 10-agent review workflows, with every finding checked by a skeptic, confirmed 24 defects (11 in Phase 1, 13 in Phase 2).
+  - The worst: PyPI would reject the name `pranalyzer` as a copy of `pr-analyzer`.
+  - The user chose `pr-analyzer-cli`, checked against all 930,395 PyPI names with PyPI's similarity rule.
+  - A fix workflow fixed all 24 in six groups, each fix checked by a verifier, and the six branches were merged onto `fix/review-findings` with no conflicts.
+- 2026-11-03: **Final testing on `fix/review-findings`:**
+  - **Tests:** 732 pass, and 727 pass with 5 skipped on core only; the same under GitHub Actions' variables. ruff, mypy and `poetry check --lock` are clean.
+  - **Package:** the built wheel installs in a fresh venv as `pr-analyzer-cli` 0.1.0, MIT.
+  - **Real runs:** a live public PR passes; JSON output is valid; a bad URL and a missing PR both exit 2.
+  - **Bot preview:** 94.5 (A), passed. Its one Semgrep note was a false positive on the chmod that makes the cache folder private, now marked.
+  - **README:** a step-by-step Getting Started, with an install from GitHub that works before the first PyPI release.
+- 2026-11-03: **Publishing setup:** the user added the PyPI pending publisher for `pr-analyzer-cli`, and a fresh GitHub `pypi` environment was created. `gh` is logged in as Quantumstringfloops.
 
 ## Work Remaining
 
 - **Production build:** none. The gate stopped it.
 - **Free-CLI track:**
-  - get PR #3 reviewed and merged (see Next Step);
-  - publish to PyPI or as a GitHub Action;
-  - optionally purge the leaked `.env` from git history (a force-push to a public repo; only after the keys are rotated, and only with explicit approval).
+  - open PR #5 from `fix/review-findings` and merge it once CI and the bot pass. The user asked for the merge to be done for them.
+  - Release `v0.1.0` to PyPI by pushing the tag, after PR #5 merges and only on the user's go.
+  - Demo for LinkedIn:
+    - a demo PR with deliberately flawed code, approved by the user, to be closed unmerged after recording;
+    - capture the terminal and GitHub views, and render the MP4 and GIF (renderer: `scratchpad/video/make_demo.py`);
+    - write the final LinkedIn post. Deliverables go in `linkedin-demo/`, which git ignores.
+  - Optionally purge the dead keys from git history: a force-push, only with explicit approval.
 - **User actions:**
-  - revoke the leaked OpenAI and Gemini keys;
-  - update the local dev venv (`poetry install --extras "security"` in `pr-analyzer/`), which still has Typer 0.12.5.
+  - update the local dev venv (`poetry install --all-extras` in `pr-analyzer/`).
 
 ## Next Step
 
 **Do not start or resume a production build from this file.** The gate failed.
 
-PR #3 (https://github.com/Quantumstringfloops/PRanalyzer/pull/3) is open from `fix/working-cli`, with all checks passing and an up-to-date description. Merging it is the user's call. The remaining follow-ups are under Work Remaining.
+Open PR #5 from `fix/review-findings` with `gh pr create`, wait for CI and the bot, and merge it with `gh pr merge`. Then do the demo, the video and the LinkedIn post, and the `v0.1.0` release once the user says go.
 
 If the user changes the preconditions above and explicitly asks, re-run the gate.
