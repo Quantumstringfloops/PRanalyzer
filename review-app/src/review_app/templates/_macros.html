@@ -1,0 +1,22 @@
+{% macro verdict_badge(verdict) -%}
+  <span class="badge {{ verdict or 'none' }}">{{ verdict | verdict }}</span>
+{%- endmacro %}
+
+{% macro outcome(value) -%}
+  {% if value %}<span class="outcome {{ value }}">{{ value | replace('_', ' ') }}</span>{% else %}—{% endif %}
+{%- endmacro %}
+
+{% macro score(row) -%}
+  {% if row.score is not none %}{{ '%.1f' | format(row.score) }} <span class="grade">{{ row.grade }}</span>{% else %}—{% endif %}
+{%- endmacro %}
+
+{% macro details(value) -%}
+  {% if value is mapping %}
+    <dl class="details">
+    {% for key, item in value | dictsort %}
+      <dt>{{ key }}</dt>
+      <dd>{% if item is string %}{{ item }}{% elif item is iterable and item is not mapping %}{{ item | join('; ') }}{% else %}{{ item }}{% endif %}</dd>
+    {% endfor %}
+    </dl>
+  {% else %}{{ value }}{% endif %}
+{%- endmacro %}

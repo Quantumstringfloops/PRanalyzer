@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% from "_macros.html" import verdict_badge, outcome, details %}
+{% block title %}{{ pr.repo }}#{{ pr.number }} · review-app{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="/repos/{{ pr.repo }}">{{ pr.repo }}</a></p>
+<h1>#{{ pr.number }} {{ pr.title }}</h1>
+<p class="muted">by {{ pr.author or 'unknown' }} · into {{ pr.base_branch }} · {{ pr.state }}{% if pr.is_fork %} · <span class="warn">from a fork</span>{% endif %}{% if pr.is_draft %} · draft{% endif %} · head <code>{{ pr.head_sha[:12] }}</code> · <a href="{{ github_url }}" rel="noreferrer noopener">on GitHub</a></p>
+
+{% set d = decisions[0] if decisions else none %}
+{% if d %}
+<section class="panel decision {{ d.verdict }}">
+  <h2>{{ verdict_badge(d.verdict) }} confidence {{ '%.2f' | format(d.confidence) }}</h2>
+  <p>Outcome: {{ outcome(d.outcome) }} · mode {{ d.mode }} · commit <code>{{ d.head_sha[:12] }}</code>{% if not d.complete %} · <span class="warn">analysis incomplete</span>{% endif %}</p>
+  <ul class="reasons">
+    {% for reason in d.reasons %}<li>{{ reason }}</li>{% endfor %}
+  </ul>
+  {% set c = d.facts.confidence %}
+  {% if c %}<p class="muted">Confidence = size {{ c.size }} × coverage {{ c.coverage }} × AI certainty {{ c.ai_certainty }}</p>{% endif %}
+</section>
+{% endif %}
+
+{% if analysis %}
+<section>
+  <h2>Analysis</h2>
+  {% if analysis.error %}
+  <p class="warn">The analysis failed: {{ analysis.error }}</p>
+  {% else %}
+  <p>Score <strong>{{ '%.1f' | format(analysis.score) }}</strong> <span class="grade">{{ analysis.grade }}</span>
+     · {{ analysis.critical_count }} critical · {{ analysis.high_count }} high
+     · AI review: {{ analysis.llm_provider or 'did not run' }}
+     · {{ '%.1f' | format(analysis.duration or 0) }} s</p>
+  {% if analysis.dimensions %}
+  <p class="muted">{% for name, value in analysis.dimensions | dictsort %}{{ name }} {{ value }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+  {% endif %}
+  {% if analysis.warnings %}
+  <h3>Warnings</h3>
+  <ul class="warnings">{% for w in analysis.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  {% endif %}
+  <h3>Findings ({{ analysis.findings | length }})</h3>
+  {% if analysis.findings %}
+  <table>
+    <thead><tr><th>Severity</th><th>Where</th><th>Finding</th><th>Source</th></tr></thead>
+    <tbody>
+    {% for f in analysis.findings %}
+      <tr>
+        <td><span class="sev {{ f.severity | lower }}">{{ f.severity }}</span></td>
+        <td><code>{{ f.filename }}{% if f.line %}:{{ f.line }}{% endif %}</code></td>
+        <td><strong>{{ f.title }}</strong><br><span class="muted">{{ f.description }}</span></td>
+        <td>{{ f.source }}{% if f.source == 'llm' %} ({{ '%.2f' | format(f.confidence) }}){% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">None.</p>{% endif %}
+  {% endif %}
+</section>
+{% endif %}
+
+{% if decisions | length > 1 %}
+<section>
+  <h2>Earlier decisions</h2>
+  <table>
+    <thead><tr><th>When</th><th>Commit</th><th>Decision</th><th>Confidence</th><th>Outcome</th><th>Why</th></tr></thead>
+    <tbody>
+    {% for old in decisions[1:] %}
+      <tr>
+        <td class="muted">{{ old.created_at | when }}</td>
+        <td><code>{{ old.head_sha[:12] }}</code></td>
+        <td>{{ verdict_badge(old.verdict) }}</td>
+        <td>{{ '%.2f' | format(old.confidence) }}</td>
+        <td>{{ outcome(old.outcome) }}</td>
+        <td>{{ old.reasons | join(' · ') }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section>
+  <h2>Audit trail</h2>
+  {% if events %}
+  <table>
+    <thead><tr><th>When</th><th>Who</th><th>What</th><th>Commit</th><th>Details</th></tr></thead>
+    <tbody>
+    {% for e in events %}
+      <tr>
+        <td class="muted">{{ e.at | when }}</td>
+        <td>{{ e.actor }}</td>
+        <td><code>{{ e.action }}</code></td>
+        <td>{% if e.head_sha %}<code>{{ e.head_sha[:12] }}</code>{% endif %}</td>
+        <td>{{ details(e.details) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">Nothing recorded yet.</p>{% endif %}
+</section>
+{% endblock %}

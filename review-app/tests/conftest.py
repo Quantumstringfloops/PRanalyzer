@@ -1,7 +1,7 @@
 import os
 
 import pytest
-
+import structlog
 from pr_analyzer.config import Settings as AnalyzerSettings
 from pr_analyzer.config import settings as analyzer_settings
 from pr_analyzer.models import AnalysisResult, FileChange, PRSummary, QualityScore, Suggestion
@@ -31,6 +31,14 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
 
+@pytest.fixture(autouse=True)
+def reset_logging():
+    # the CLI points structlog at the stderr of the runner that invoked it; undo that so later
+    # tests don't log into a stream that is closed by then
+    yield
+    structlog.reset_defaults()
+
+
 @pytest.fixture
 def store(tmp_path) -> Store:
     store = Store(tmp_path / "review-app.db")
@@ -44,9 +52,10 @@ def queue(store) -> JobQueue:
 
 
 def make_pull(**changes) -> PullInfo:
-    values = dict(repo="octo/app", number=7, title="Add a helper", author="dev", head_sha=SHA,
-                  base_branch="main", default_branch="main", head_repo_id=1, base_repo_id=1,
-                  is_draft=False, state="open", changed_files=1, additions=10, deletions=2)
+    values = {"repo": "octo/app", "number": 7, "title": "Add a helper", "author": "dev",
+              "head_sha": SHA, "base_branch": "main", "default_branch": "main",
+              "head_repo_id": 1, "base_repo_id": 1, "is_draft": False, "state": "open",
+              "changed_files": 1, "additions": 10, "deletions": 2}
     values.update(changes)
     return PullInfo(**values)
 

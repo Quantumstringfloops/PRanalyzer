@@ -37,6 +37,10 @@ line-length = 100
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+filterwarnings = [
+    # Starlette would like httpx >= 0.28 for TestClient; pr-analyzer pins httpx below it
+    "ignore:Using .httpx. with .starlette.testclient. is deprecated",
+]
 
 [build-system]
 requires = ["poetry-core>=2.2,<3"]

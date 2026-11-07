@@ -16,7 +16,6 @@ from conftest import (
     make_result,
 )
 from github import GithubException
-
 from pr_analyzer.exceptions import PRAnalyzerError, RateLimitError
 
 from review_app.models import MergeResult

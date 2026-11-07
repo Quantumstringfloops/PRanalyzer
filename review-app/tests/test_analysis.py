@@ -1,12 +1,12 @@
 """PrAnalyzer: pr-analyzer's pipeline run with an installation token, plus what the decision
 needs beyond its result."""
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 import requests
 from conftest import NEW_SHA, SHA, make_pull, make_result
 from github import GithubException
-
 from pr_analyzer.exceptions import PRAnalyzerError
 from pr_analyzer.security import tools
 
@@ -15,9 +15,9 @@ from review_app.analysis import PrAnalyzer
 
 
 class FakePipeline:
-    instances: list["FakePipeline"] = []
+    instances: ClassVar[list["FakePipeline"]] = []
     config: bytes | None = None
-    files: list = []
+    files: ClassVar[list] = []
     head = SHA
     list_error: Exception | None = None
     run_error: Exception | None = None

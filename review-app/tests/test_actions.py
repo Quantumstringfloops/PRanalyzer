@@ -94,7 +94,7 @@ def test_a_merge_held_for_checks_waits(store):
 
 def test_a_refused_merge_is_recorded_not_worked_around(store):
     gateway = FakeGateway(merge=MergeResult(False, "At least 1 approving review is required"))
-    outcome, decision_id = carry_out(store, gateway)
+    outcome, _ = carry_out(store, gateway)
     assert outcome == "merge_refused"
     assert gateway.names().count("merge") == 1
     assert audit_actions(store)[-1] == "merge.refused"

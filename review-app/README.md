@@ -121,6 +121,16 @@ are errors, and the app won't start on an invalid file. `mode = "auto"` is only 
 repository's own table. A repository's `.pr-analyzer.toml` still shapes the analysis
 (`block_on`, `disable`, `ignore_paths`).
 
+## Troubleshooting
+
+**`No module named 'pr_analyzer'` (or `'review_app'`) on macOS.** Python 3.12 and later skip
+`.pth` files that carry the macOS *hidden* flag, and editable installs rely on them. Files under
+a hidden folder, such as a worktree in `.claude/worktrees/`, can get that flag. Clear it:
+
+```bash
+chflags nohidden .venv/lib/python3.*/site-packages/*.pth
+```
+
 ## Tests
 
 ```bash

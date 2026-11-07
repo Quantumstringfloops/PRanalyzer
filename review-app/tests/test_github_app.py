@@ -50,12 +50,13 @@ def test_a_personal_token_cannot_post_check_runs():
 
 
 def api_pr(**changes):
-    values = dict(
-        number=7, title="Add a helper", user=SimpleNamespace(login="dev"),
-        head=SimpleNamespace(sha=SHA, repo=SimpleNamespace(id=1)),
-        base=SimpleNamespace(ref="main", repo=SimpleNamespace(id=1, default_branch="main")),
-        draft=False, merged=False, state="open", changed_files=2, additions=3, deletions=1,
-    )
+    values = {
+        "number": 7, "title": "Add a helper", "user": SimpleNamespace(login="dev"),
+        "head": SimpleNamespace(sha=SHA, repo=SimpleNamespace(id=1)),
+        "base": SimpleNamespace(ref="main", repo=SimpleNamespace(id=1, default_branch="main")),
+        "draft": False, "merged": False, "state": "open", "changed_files": 2, "additions": 3,
+        "deletions": 1,
+    }
     values.update(changes)
     return SimpleNamespace(**values)
 
