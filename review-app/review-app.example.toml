@@ -1,0 +1,27 @@
+# review-app's policy: what it may do, and the thresholds it decides by. Copy to review-app.toml.
+# The values shown in [defaults] are the built-in defaults. A repository table only needs the
+# keys that differ. Unknown keys are errors.
+
+[defaults]
+enabled = true                 # false: ignore the repository's PRs
+mode = "recommend"             # recommend: report the decision only. "auto" is per repository.
+merge_min_score = 90           # 0-100
+merge_min_grade = "A-"         # A+ A A- B+ B B- C+ C C- D F
+merge_min_confidence = 0.8     # 0-1, see DESIGN.md
+block_below_score = 65
+block_below_grade = "D"        # grades below this (F) block
+require_llm_review = true      # no merge without the AI review
+merge_method = "squash"        # merge | squash | rebase
+base_branches = []             # empty = only the repository's default branch
+# PRs that change these always go to a human (.gitignore-style patterns)
+review_paths = [".github/**", ".pr-analyzer.toml", "CODEOWNERS"]
+reviewers = []                 # GitHub logins asked to review, in auto mode
+team_reviewers = []            # team slugs
+post_review = true             # post pr-analyzer's review and inline comments
+
+# A repository that lets the app merge for real:
+# [repos."owner/name"]
+# mode = "auto"
+# merge_min_score = 93
+# reviewers = ["octocat"]
+# review_paths = [".github/**", ".pr-analyzer.toml", "CODEOWNERS", "requirements*.txt"]
