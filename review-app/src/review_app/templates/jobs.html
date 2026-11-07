@@ -15,7 +15,7 @@
       <td>{% if j.head_sha %}<code>{{ j.head_sha[:12] }}</code>{% endif %}</td>
       <td><span class="status {{ j.status }}">{{ j.status }}</span></td>
       <td>{{ j.attempts }}</td>
-      <td class="muted">{{ j.run_after | when }}</td>
+      <td class="muted when">{{ j.run_after | when }}</td>
       <td class="muted">{{ j.last_error or '' }}</td>
     </tr>
   {% endfor %}

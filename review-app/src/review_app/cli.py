@@ -174,7 +174,7 @@ def analyze(
     one_off = PolicyBook(defaults=policy, source=policies.source)
     access = TokenAccess(analyzer_settings.github_token)
     loop = Worker(store, JobQueue(store), one_off, PrAnalyzer(), access,
-                  skip_llm=settings.review_app_skip_llm, actor="cli")
+                  skip_llm=settings.review_app_skip_llm, actor="cli", include_closed=True)
     # not queued, so a running webhook server's worker can't pick it up; out of tries, so a
     # passing error ends in a decision instead of a retry
     job = Job(id=0, kind="analyze", repo=repo, pr_number=number, head_sha="",

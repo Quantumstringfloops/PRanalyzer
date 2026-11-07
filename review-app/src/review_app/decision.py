@@ -174,6 +174,8 @@ def block_reasons(outcome: AnalysisOutcome, policy: Policy) -> list[str]:
 
 def pr_gate_reasons(pull: PullInfo, policy: Policy, paths: list[str]) -> list[str]:
     reasons = []
+    if pull.state != "open":
+        reasons.append(f"It is {pull.state}, not open")
     if pull.is_fork:
         reasons.append("It comes from a fork, and fork PRs are never merged automatically")
     if pull.is_draft:

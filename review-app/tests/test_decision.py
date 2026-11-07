@@ -175,6 +175,13 @@ def test_a_draft_needs_review():
     assert decision.verdict is Verdict.NEEDS_REVIEW
 
 
+@pytest.mark.parametrize("state", ["closed", "merged"])
+def test_a_pr_that_is_not_open_is_never_merged(state):
+    decision = decide(make_pull(state=state), POLICY, make_outcome())
+    assert decision.verdict is Verdict.NEEDS_REVIEW
+    assert f"It is {state}, not open" in decision.reasons
+
+
 def test_only_allowed_base_branches_merge():
     release = make_pull(base_branch="release/1.x")
     assert decide(release, POLICY, make_outcome()).verdict is Verdict.NEEDS_REVIEW

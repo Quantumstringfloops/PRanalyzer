@@ -71,7 +71,8 @@ def analysis_summary(outcome: AnalysisOutcome) -> dict[str, Any]:
 
 class Worker:
     def __init__(self, store: Store, queue: JobQueue, policies: PolicyBook, analyzer: Analyzer,
-                 access: GitHubAccess, *, skip_llm: bool = False, actor: str = "worker"):
+                 access: GitHubAccess, *, skip_llm: bool = False, actor: str = "worker",
+                 include_closed: bool = False):
         self.store = store
         self.queue = queue
         self.policies = policies
@@ -79,6 +80,9 @@ class Worker:
         self.access = access
         self.skip_llm = skip_llm
         self.actor = actor
+        # analyse closed PRs too: for `review-app analyze`, a report on any PR. The merge gates
+        # still refuse a PR that isn't open.
+        self.include_closed = include_closed
         self.executor = Executor(store, actor)
 
     # ── the loop ────────────────────────────────────────────────────────────────────────
@@ -129,7 +133,7 @@ class Worker:
 
         with closing(self._gateway(job)) as gateway:
             pull = self._read_pull(gateway, job)
-            if pull.state != "open":
+            if pull.state != "open" and not self.include_closed:
                 self.store.audit(self.actor, "job.skipped", job.repo, job.pr_number,
                                  job.head_sha, job=job.id, reason=f"the PR is {pull.state}")
                 return "done"

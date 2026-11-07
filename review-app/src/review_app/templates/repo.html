@@ -32,7 +32,7 @@
         <td>{% if p.confidence is not none %}{{ '%.2f' | format(p.confidence) }}{% else %}—{% endif %}</td>
         <td>{{ verdict_badge(p.verdict) }}</td>
         <td>{{ outcome(p.outcome) }}</td>
-        <td class="muted">{{ p.decided_at | when }}</td>
+        <td class="muted when">{{ p.decided_at | when }}</td>
       </tr>
     {% endfor %}
     </tbody>

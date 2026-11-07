@@ -51,7 +51,7 @@
         <td>{{ '%.2f' | format(d.confidence) }}{% if not d.complete %} <span class="warn" title="analysis incomplete">incomplete</span>{% endif %}</td>
         <td>{{ verdict_badge(d.verdict) }}</td>
         <td>{{ outcome(d.outcome) }}</td>
-        <td class="muted">{{ d.created_at | when }}</td>
+        <td class="muted when">{{ d.created_at | when }}</td>
       </tr>
     {% endfor %}
     </tbody>

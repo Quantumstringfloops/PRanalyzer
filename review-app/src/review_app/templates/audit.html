@@ -21,7 +21,7 @@
   {% for e in entries %}
     <tr>
       <td class="muted">{{ e.id }}</td>
-      <td class="muted">{{ e.at | when }}</td>
+      <td class="muted when">{{ e.at | when }}</td>
       <td>{{ e.actor }}</td>
       <td><code>{{ e.action }}</code></td>
       <td>{% if e.repo %}{{ e.repo }}{% if e.pr_number %}#{{ e.pr_number }}{% endif %}{% endif %}{% if e.head_sha %} <code>{{ e.head_sha[:12] }}</code>{% endif %}</td>

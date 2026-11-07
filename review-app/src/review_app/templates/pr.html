@@ -64,7 +64,7 @@
     <tbody>
     {% for old in decisions[1:] %}
       <tr>
-        <td class="muted">{{ old.created_at | when }}</td>
+        <td class="muted when">{{ old.created_at | when }}</td>
         <td><code>{{ old.head_sha[:12] }}</code></td>
         <td>{{ verdict_badge(old.verdict) }}</td>
         <td>{{ '%.2f' | format(old.confidence) }}</td>
@@ -85,7 +85,7 @@
     <tbody>
     {% for e in events %}
       <tr>
-        <td class="muted">{{ e.at | when }}</td>
+        <td class="muted when">{{ e.at | when }}</td>
         <td>{{ e.actor }}</td>
         <td><code>{{ e.action }}</code></td>
         <td>{% if e.head_sha %}<code>{{ e.head_sha[:12] }}</code>{% endif %}</td>

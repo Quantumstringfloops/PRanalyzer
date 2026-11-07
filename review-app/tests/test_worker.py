@@ -131,6 +131,18 @@ def test_a_closed_pr_is_skipped(store, queue):
     assert audit_actions(store) == ["job.skipped"]
 
 
+def test_a_one_off_report_covers_closed_prs_but_never_merges_them(store, queue):
+    queue.enqueue("analyze", "octo/app", 7, SHA, 11)
+    gateway = FakeGateway(make_pull(state="closed"))
+    worker = Worker(store, queue, PolicyBook(repos={"octo/app": Policy(mode="auto")}),
+                    FakeAnalyzer(), FakeAccess(gateway), include_closed=True)
+    worker.run_once()
+    decision = latest(store)
+    assert (decision["verdict"], decision["outcome"]) == ("needs_review", "needs_review")
+    assert "It is closed, not open" in decision["reasons"]
+    assert "merge" not in gateway.names()
+
+
 def test_a_job_for_an_old_head_is_superseded(store, queue):
     queue.enqueue("analyze", "octo/app", 7, SHA, 11)
     analyzer = FakeAnalyzer()
