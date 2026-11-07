@@ -444,5 +444,10 @@ def open_cache(enabled: bool = True) -> DiskCache:
         root,
         max_bytes=settings.cache_max_size_mb * MEGABYTE,
         max_age_seconds=settings.cache_max_age_days * DAY_SECONDS,
-        secrets=(settings.github_token, settings.openai_api_key, settings.anthropic_api_key),
+        secrets=(
+            settings.github_token,
+            settings.openai_api_key,
+            settings.anthropic_api_key,
+            settings.nvidia_api_key,
+        ),
     )

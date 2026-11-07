@@ -100,11 +100,16 @@ def low_severity_counts(findings: list[Suggestion], min_severity: str = "MEDIUM"
 
 class AnalysisPipeline:
     def __init__(
-        self, skip_llm: bool = False, post_review: bool = False, use_cache: bool = True
+        self,
+        skip_llm: bool = False,
+        post_review: bool = False,
+        use_cache: bool = True,
+        github_token: str | None = None,
     ) -> None:
         # file contents and LLM replies; --no-cache (use_cache=False) neither reads nor writes it
         self.cache    = open_cache(enabled=use_cache)
-        self.github   = GithubClient(cache=self.cache)
+        # None = GITHUB_TOKEN; review-app passes a GitHub App installation token for each run
+        self.github   = GithubClient(token=github_token, cache=self.cache)
         self.static   = StaticAnalyzer()
         self.security = SecurityScanner()
         self.llm      = LLMEngine(cache=self.cache)
