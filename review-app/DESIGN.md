@@ -43,6 +43,7 @@ Non-goals for now:
 | `db.py` | SQLite schema and data access, including the hash-chained audit log |
 | `jobs.py` | Durable job queue in SQLite: dedupe per PR, retries with backoff, crash recovery |
 | `webhooks.py` | Signature check (`X-Hub-Signature-256`, constant-time) and event routing |
+| `models.py` | The facts passed between parts: a PR's state, its files, an analysis outcome |
 | `analysis.py` | Runs pr-analyzer with an installation token, collects what the decision needs |
 | `decision.py` | Completeness, confidence and the decision itself, as pure functions |
 | `github_app.py` | App JWT → installation tokens (cached), plus a small gateway for PR state, check runs, merges and review requests |
@@ -66,9 +67,10 @@ only `localhost` / `127.0.0.1` Host headers, against DNS rebinding.
    push supersedes queued jobs for the same PR. `closed` cancels them. Installation events keep
    the repository list current. Completed check suites and statuses re-queue a merge that was
    waiting for required checks.
-3. **Analyze.** The worker re-reads the PR. If it has closed, or its head has moved on, the job
-   is superseded. Otherwise it runs `AnalysisPipeline` with an installation token. pr-analyzer
-   posts its usual review comments when the repository's policy has `post_review`.
+3. **Analyze.** The worker re-reads the PR. A closed PR is skipped. If the head has moved on,
+   the job is superseded by one for the new head. Otherwise it runs `AnalysisPipeline` with an
+   installation token. pr-analyzer posts its usual review comments when the repository's policy
+   has `post_review`.
 4. **Decide.** The decision is a pure function of the analysis, the PR's metadata and the
    repository's policy (below).
 5. **Act.** The executor reports the decision as a check run on the analysed commit and acts on
@@ -84,6 +86,7 @@ Rules apply in order:
    over an incomplete analysis, since a fuller analysis can only find more.
 2. **Needs review** if any merge gate fails. Every failing gate is listed as a reason:
    - the analysis is **incomplete** (see below), or it failed outright;
+   - the PR isn't open (`review-app analyze` reports on closed PRs too);
    - the PR comes from a **fork** (head repo ≠ base repo, or the head repo is gone);
    - the PR is a draft, or targets a branch outside `base_branches` (default: the repository's
      default branch);
