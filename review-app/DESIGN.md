@@ -8,6 +8,9 @@ Merging is fail-safe. By default the app only recommends. It merges for real onl
 repository that opts into it, only through GitHub's merge API, and never when the analysis was
 incomplete or the PR comes from a fork.
 
+This file is the design and its reasons. For a plain-language walk-through of how the app
+behaves, see [HOW-IT-WORKS.md](HOW-IT-WORKS.md).
+
 ## Goals and non-goals
 
 Goals:

@@ -17,7 +17,9 @@ nothing until a repository opts in with `mode = "auto"`. Even then it never merg
 - through anything but GitHub's merge API, pinned to the analysed commit, so branch protection
   and required checks still apply.
 
-[DESIGN.md](DESIGN.md) explains how it works and why.
+New to it? [HOW-IT-WORKS.md](HOW-IT-WORKS.md) walks through the whole app in plain words: a
+PR's journey, how decisions are made, the safety rails, the dashboard, where data lives, and
+what runs today. [DESIGN.md](DESIGN.md) explains the design and why.
 
 ## Install
 
