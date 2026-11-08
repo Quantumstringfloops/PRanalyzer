@@ -220,6 +220,62 @@ def test_the_only_outside_source_is_the_font(store):
                       "/static/style.css"]
 
 
+def current_theme(page: str) -> list[str]:
+    return re.findall(r'<a href="/theme/(\w+)\?next=[^"]*" title="[^"]+" class="on" '
+                      r'aria-current="true">', page)
+
+
+def test_the_theme_switch(store):
+    client = dashboard(store)
+    page = client.get("/").text
+    assert '<html lang="en">' in page and current_theme(page) == ["system"]
+    assert '<meta name="color-scheme" content="light dark">' in page
+
+    response = client.get("/theme/dark", params={"next": "/audit?repo=octo/app"},
+                          follow_redirects=False)
+    assert (response.status_code, response.headers["location"]) == (303, "/audit?repo=octo/app")
+    cookie = response.headers["set-cookie"].lower()
+    assert "review_app_theme=dark" in cookie and "httponly" in cookie and "samesite=lax" in cookie
+    page = client.get("/audit").text
+    assert '<html lang="en" data-theme="dark">' in page and current_theme(page) == ["dark"]
+    assert '<meta name="color-scheme" content="dark">' in page
+    assert 'href="/theme/light?next=/audit"' in page          # each link comes back here
+
+    client.get("/theme/system", follow_redirects=False)       # forget the choice
+    assert '<html lang="en">' in client.get("/").text
+
+
+@pytest.mark.parametrize(("target", "expected"), [
+    ("/prs/1", "/prs/1"), ("//evil.example", "/"), ("https://evil.example", "/"),
+    ("/login?next=%2Fprs%2F1", "/login?next=%2Fprs%2F1"), ("/login\\evil", "/"),
+])
+def test_the_theme_switch_only_returns_to_pages_here(store, target, expected):
+    response = dashboard(store).get("/theme/light", params={"next": target},
+                                    follow_redirects=False)
+    assert response.headers["location"] == expected
+
+
+def test_unknown_themes(store):
+    client = dashboard(store)
+    assert client.get("/theme/neon").status_code == 404
+    client.cookies.set("review_app_theme", "neon")             # a cookie set by hand
+    assert current_theme(client.get("/").text) == ["system"]
+
+
+def test_a_chosen_dark_theme_gets_every_dark_token():
+    # the dark tokens are written twice: for a dark system, and for dark chosen with the switch
+    css = (Path(review_app.__file__).parent / "static" / "style.css").read_text(encoding="utf-8")
+    system = re.search(r':root:not\(\[data-theme="light"\]\) \{(.*?)\n  \}', css, re.DOTALL)
+    chosen = re.search(r':root\[data-theme="dark"\] \{(.*?)\n\}', css, re.DOTALL)
+    assert system and chosen
+
+    def declarations(block: str) -> dict[str, str]:
+        return dict(re.findall(r"^\s*([\w-]+): (.+);$", block, re.MULTILINE))
+
+    assert declarations(system.group(1)) == declarations(chosen.group(1))
+    assert len(declarations(chosen.group(1))) > 30
+
+
 def test_the_activity_chart(store, queue):
     run_one_pr(store, queue)
     page = dashboard(store).get("/").text

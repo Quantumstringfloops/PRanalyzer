@@ -425,6 +425,15 @@ def test_other_host_names_need_https(store, supabase):
     assert other.get("/login").status_code == 403
 
 
+def test_the_theme_switch_works_before_signing_in(store, supabase):
+    client = dashboard(store, supabase)
+    response = client.get("/theme/light", params={"next": "/login"})
+    assert (response.status_code, response.headers["location"]) == (303, "/login")
+    page = client.get("/login").text
+    assert '<html lang="en" data-theme="light">' in page
+    assert 'aria-label="Theme"' in page and 'aria-label="Main"' not in page
+
+
 def test_without_login_the_dashboard_is_as_before(store):
     client = TestClient(create_dashboard_app(Store(store.path, readonly=True), PolicyBook()),
                         base_url="http://localhost:8001", follow_redirects=False)

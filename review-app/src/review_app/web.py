@@ -77,6 +77,9 @@ REFRESH_COOKIE = "review_app_refresh"
 REFRESH_MAX_AGE = 7 * 24 * 3600     # sign in again after a week
 LOGIN_POSTS = frozenset({"/auth/login", "/auth/logout", "/auth/refresh"})
 MAX_FORM_BYTES = 16 * 1024
+# the theme switch: a choice kept in a cookie (no script, so the page reloads in it)
+THEME_COOKIE = "review_app_theme"
+THEMES = ("light", "dark", "system")
 # One fixed statement for every filter combination: an empty filter switches its own condition
 # off, so no SQL is ever put together from what a request sends.
 AUDIT_PAGE = (
@@ -262,7 +265,24 @@ def create_dashboard_app(store: Store, policies: PolicyBook,
         return secured(response)
 
     def page(request: Request, name: str, status_code: int = 200, **context: Any) -> HTMLResponse:
-        return templates.TemplateResponse(request, name, context, status_code=status_code)
+        return templates.TemplateResponse(request, name, {"theme": theme_of(request), **context},
+                                          status_code=status_code)
+
+    @app.get("/theme/{choice}")
+    def set_theme(request: Request, choice: str,
+                  next_page: str = Query("/", alias="next")) -> Response:
+        """Light, dark, or the system's: kept for a year, then back to the page it came from."""
+        if choice not in THEMES:
+            raise HTTPException(404, NOTHING_HERE)
+        response = RedirectResponse(back_to(next_page), status_code=303)
+        secure = not on_loopback(request)
+        if choice == "system":
+            response.delete_cookie(THEME_COOKIE, path="/", secure=secure, httponly=True,
+                                   samesite="lax")
+        else:
+            response.set_cookie(THEME_COOKIE, choice, max_age=365 * 24 * 3600, path="/",
+                                secure=secure, httponly=True, samesite="lax")
+        return response
 
     @app.get("/login", response_class=HTMLResponse)
     def login_page(request: Request, next_page: str = Query("/", alias="next")) -> Response:
@@ -506,8 +526,23 @@ def identify(login: Login, request: Request) -> tuple[User | None, Session | Non
 
 def checks_login(path: str) -> bool:
     """Every page needs a signed-in admin but the login page itself, the stylesheet and icon,
-    the health check and the sign-in endpoints."""
-    return not (path.startswith("/static/") or path == "/healthz" or path in LOGIN_POSTS)
+    the health check, the sign-in endpoints and the theme switch."""
+    return not (path.startswith(("/static/", "/theme/")) or path == "/healthz"
+                or path in LOGIN_POSTS)
+
+
+def theme_of(request: Request) -> str:
+    choice = request.cookies.get(THEME_COOKIE, "")
+    return choice if choice in ("light", "dark") else "system"
+
+
+def back_to(target: str | None) -> str:
+    """Where the theme switch returns to: any page here, the sign-in page included."""
+    target = target or "/"
+    if (target == "/login" or target.startswith("/login?")) and not any(
+            ch in target for ch in "\r\n\\"):
+        return target
+    return safe_next(target)
 
 
 def login_required(request: Request) -> Response:
