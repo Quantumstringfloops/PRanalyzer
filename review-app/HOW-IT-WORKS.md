@@ -338,16 +338,17 @@ You don't need a GitHub App for this.
 
 ## What runs today
 
-- **review-app** is built and its code is on `main`. The newer dashboard work (the redesign,
-  login, this design and the theme switch) is in open PRs.
+- **review-app** is built and on `main`, including the dashboard redesign, login and the
+  shadcn design (PRs #13 and #14).
   - **It isn't connected to GitHub yet.** No GitHub App has been created, so it doesn't see new
     PRs on its own. So far it has only been run by hand with `review-app analyze`.
   - **Login is built** but waits for a Supabase project.
 - **The repository's own "PR Analysis" workflow** is a separate thing. It's GitHub Actions
-  running pr-analyzer on each PR from this repository and posting a review. Its AI part is
-  skipped because the repository has no AI key secret. PR #12 switches it to NVIDIA.
-  - **Before adding an `NVIDIA_API_KEY` repository secret, read the review on PR #12.** As
-    written, that workflow hands the key to code the pull request itself can change.
+  running pr-analyzer on each PR from this repository and posting a review.
+  - **Its AI review is set up for NVIDIA (PR #12), but still skipped:** the repository has no
+    `NVIDIA_API_KEY` secret yet.
+  - **Read the security review on PR #12 before adding that secret.** As merged, the workflow
+    hands the key to code the pull request itself can change.
 - **Qodo** is meant to review PRs too. When last checked, it hadn't commented on any PR here,
   and it may need installing as a GitHub App.
 - **You merge PRs by hand.** review-app merging for you is the future auto mode, repository by
