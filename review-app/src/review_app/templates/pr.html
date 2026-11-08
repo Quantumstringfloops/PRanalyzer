@@ -1,99 +1,209 @@
 {% extends "base.html" %}
-{% from "_macros.html" import verdict_badge, outcome, details %}
+{% from "_macros.html" import icon, glyph, verdict_glyph, verdict_pill, outcome_text, time_ago, sha, grade_chip, score_meter, audit_event, empty_state, tilt_zones %}
 {% block title %}{{ pr.repo }}#{{ pr.number }} · review-app{% endblock %}
 {% block content %}
-<p class="crumbs"><a href="/repos/{{ pr.repo }}">{{ pr.repo }}</a></p>
-<h1>#{{ pr.number }} {{ pr.title }}</h1>
-<p class="muted">by {{ pr.author or 'unknown' }} · into {{ pr.base_branch }} · {{ pr.state }}{% if pr.is_fork %} · <span class="warn">from a fork</span>{% endif %}{% if pr.is_draft %} · draft{% endif %} · head <code>{{ pr.head_sha[:12] }}</code> · <a href="{{ github_url }}" rel="noreferrer noopener">on GitHub</a></p>
+<nav class="crumbs" aria-label="Breadcrumb">
+  <a href="/">Overview</a>{{ icon('chevron') }}<a href="/repos/{{ pr.repo }}">{{ pr.repo }}</a>{{ icon('chevron') }}<span aria-current="page">#{{ pr.number }}</span>
+</nav>
+<header class="page-head">
+  <h1><span class="h1-number">#{{ pr.number }}</span> {{ pr.title }}</h1>
+  <p class="meta">
+    <span class="tag state-{{ pr.state }}">{{ pr.state }}</span>
+    {% if pr.is_draft %}<span class="tag">draft</span>{% endif %}
+    {% if pr.is_fork %}<span class="tag tone-serious">from a fork</span>{% endif %}
+    <span>{{ icon('user') }}{{ pr.author or 'unknown' }}</span>
+    <span>{{ icon('branch') }}into <code>{{ pr.base_branch }}</code></span>
+    <span>{{ icon('commit') }}head {{ sha(pr.head_sha) }}</span>
+    <a href="{{ github_url }}" rel="noreferrer noopener">On GitHub {{ icon('external') }}</a>
+  </p>
+</header>
 
 {% set d = decisions[0] if decisions else none %}
 {% if d %}
-<section class="panel decision {{ d.verdict }}">
-  <h2>{{ verdict_badge(d.verdict) }} confidence {{ '%.2f' | format(d.confidence) }}</h2>
-  <p>Outcome: {{ outcome(d.outcome) }} · mode {{ d.mode }} · commit <code>{{ d.head_sha[:12] }}</code>{% if not d.complete %} · <span class="warn">analysis incomplete</span>{% endif %}</p>
-  <ul class="reasons">
-    {% for reason in d.reasons %}<li>{{ reason }}</li>{% endfor %}
-  </ul>
+<section class="card verdict-card tone-{{ verdict_tones.get(d.verdict, 'none') }}" aria-labelledby="verdict-title">
+  <span class="tone-strip" aria-hidden="true"></span>
+  <div class="verdict-main">
+    <p class="eyebrow">Decision</p>
+    <h2 class="verdict-title" id="verdict-title">{{ verdict_glyph(d.verdict) }}{{ d.verdict | verdict }}</h2>
+    {% if d.outcome %}<p class="verdict-outcome">{{ outcome_text(d.outcome) }}<span>{{ outcome_notes.get(d.outcome, '') }}</span></p>{% endif %}
+    <p class="meta">
+      <span>{{ icon('shield') }}mode {{ d.mode }}</span>
+      <span>{{ icon('commit') }}commit {{ sha(d.head_sha) }}</span>
+      <span>{{ icon('clock') }}{{ time_ago(d.created_at) }}</span>
+      {% if not d.complete %}<span class="tag tone-warning">analysis incomplete</span>{% endif %}
+    </p>
+  </div>
+  <div class="figures">
+    {% if d.score is not none %}
+    {% set g = ring(d.score) %}
+    <div class="gauge tone-{{ score_tone(d.score, policy) }}">
+      <svg viewBox="0 0 120 120" aria-hidden="true">
+        <circle class="gauge-glow" cx="60" cy="60" r="44"/>
+        <circle class="gauge-track" cx="60" cy="60" r="{{ g.r }}"/>
+        <circle class="gauge-value" cx="60" cy="60" r="{{ g.r }}" stroke-dasharray="{{ g.dash }} {{ g.c }}" transform="rotate(-90 60 60)"/>
+      </svg>
+      <div class="gauge-label">
+        <span class="figure-label">Score</span>
+        <span class="hero">{{ '%.1f' | format(d.score) }}</span>
+        {% if d.grade %}<small>grade {{ grade_chip(d.grade, policy) }}</small>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+    <div class="confidence-tile tilt tone-{{ confidence_tone(d.confidence, policy) }}">
+      {{ tilt_zones() }}
+      <div class="tilt-body">
+        <span class="figure-label">Confidence</span>
+        <span class="figure-value">{{ '%.2f' | format(d.confidence) }}</span>
+        <span class="figure-sub">needs {{ '%g' | format(policy.merge_min_confidence) }} to merge</span>
+        <span class="meter wide" aria-hidden="true"><span class="fill w{{ d.confidence | pct(1) }}"></span></span>
+      </div>
+    </div>
+  </div>
+  <div class="verdict-why">
+    <h3>Why</h3>
+    <ul class="reasons">
+      {% for reason in d.reasons %}<li>{{ reason }}</li>{% endfor %}
+    </ul>
+  </div>
   {% set c = d.facts.confidence %}
-  {% if c %}<p class="muted">Confidence = size {{ c.size }} × coverage {{ c.coverage }} × AI certainty {{ c.ai_certainty }}</p>{% endif %}
+  {% if c %}
+  <div class="verdict-confidence">
+    <h3>Confidence = size × coverage × AI certainty</h3>
+    <div class="factors">
+      {% for label, value, hint in [('Size', c.size, 'smaller PRs are safer to judge'), ('Coverage', c.coverage, 'share of the change that was analysed'), ('AI certainty', c.ai_certainty, "the AI reviewer's own confidence")] %}
+      <div class="factor">
+        <div class="factor-top"><span>{{ label }}</span><strong class="num">{{ '%.2f' | format(value) }}</strong></div>
+        <span class="meter wide tone-info" aria-hidden="true"><span class="fill w{{ value | pct(1) }}"></span></span>
+        <span class="factor-hint">{{ hint }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% else %}
+<section class="card">
+  {% call empty_state('No decision yet', 'clock') %}This pull request is known, but it hasn't been graded. A queued analysis shows up on the Jobs page.{% endcall %}
 </section>
 {% endif %}
 
 {% if analysis %}
-<section>
-  <h2>Analysis</h2>
+<section class="card" aria-labelledby="analysis-title">
+  <header class="card-head">
+    <h2 id="analysis-title">Analysis</h2>
+    <span class="aside">{{ time_ago(analysis.created_at) }}{% if analysis.duration %} · took {{ '%.1f' | format(analysis.duration) }} s{% endif %}</span>
+  </header>
   {% if analysis.error %}
-  <p class="warn">The analysis failed: {{ analysis.error }}</p>
+  <div class="callout tone-serious">
+    {{ glyph('alert') }}
+    <div><strong>The analysis failed</strong><p>{{ analysis.error }}</p></div>
+  </div>
   {% else %}
-  <p>Score <strong>{{ '%.1f' | format(analysis.score) }}</strong> <span class="grade">{{ analysis.grade }}</span>
-     · {{ analysis.critical_count }} critical · {{ analysis.high_count }} high
-     · AI review: {{ analysis.llm_provider or 'did not run' }}
-     · {{ '%.1f' | format(analysis.duration or 0) }} s</p>
-  {% if analysis.dimensions %}
-  <p class="muted">{% for name, value in analysis.dimensions | dictsort %}{{ name }} {{ value }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
-  {% endif %}
+  <div class="analysis-grid">
+    <dl class="facts">
+      <div><dt>Score</dt><dd>{{ score_meter(analysis.score, analysis.grade, policy, wide=true) }}</dd></div>
+      <div><dt>Blocking findings</dt><dd>{{ analysis.critical_count or 0 }} critical · {{ analysis.high_count or 0 }} high</dd></div>
+      <div><dt>AI review</dt><dd>{% if analysis.llm_provider %}{{ icon('sparkle') }}{{ analysis.llm_provider }}{% else %}<span class="muted">didn't run</span>{% endif %}</dd></div>
+      <div><dt>Commit analysed</dt><dd>{{ sha(analysis.head_sha) }}</dd></div>
+    </dl>
+    {% if analysis.dimensions %}
+    <div>
+      <h3 class="sub-title">Score by dimension</h3>
+      <ul class="dims">
+        {% for name, value in analysis.dimensions | dictsort %}
+        <li>
+          <span class="dim-name">{{ name | replace('_', ' ') }}</span>
+          <span class="meter wide tone-{{ score_tone(value, policy) }}" aria-hidden="true"><span class="fill w{{ value | pct }}"></span></span>
+          <strong class="num">{{ '%.0f' | format(value) }}</strong>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </div>
   {% if analysis.warnings %}
-  <h3>Warnings</h3>
-  <ul class="warnings">{% for w in analysis.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  <div class="callout tone-warning">
+    {{ glyph('alert') }}
+    <div>
+      <strong>{{ analysis.warnings | length }} warning{{ 's' if analysis.warnings | length != 1 }}: parts of the analysis didn't run or were skipped</strong>
+      <ul>{% for w in analysis.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+    </div>
+  </div>
   {% endif %}
-  <h3>Findings ({{ analysis.findings | length }})</h3>
-  {% if analysis.findings %}
-  <table>
-    <thead><tr><th>Severity</th><th>Where</th><th>Finding</th><th>Source</th></tr></thead>
-    <tbody>
-    {% for f in analysis.findings %}
-      <tr>
-        <td><span class="sev {{ f.severity | lower }}">{{ f.severity }}</span></td>
-        <td><code>{{ f.filename }}{% if f.line %}:{{ f.line }}{% endif %}</code></td>
-        <td><strong>{{ f.title }}</strong><br><span class="muted">{{ f.description }}</span></td>
-        <td>{{ f.source }}{% if f.source == 'llm' %} ({{ '%.2f' | format(f.confidence) }}){% endif %}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% else %}<p class="muted">None.</p>{% endif %}
   {% endif %}
 </section>
+
+{% if not analysis.error %}
+<section class="card" aria-labelledby="findings-title">
+  <header class="card-head">
+    <h2 id="findings-title">Findings <span class="count">{{ analysis.findings | length }}</span></h2>
+    {% if groups %}
+    <div class="sev-counts">
+      {% for g in groups %}<span class="tag tone-{{ severity_tones.get(g.severity, 'neutral') }}">{{ g.count }} {{ g.severity | lower }}</span>{% endfor %}
+    </div>
+    {% endif %}
+  </header>
+  {% for g in groups %}
+  <details class="sev-group tone-{{ severity_tones.get(g.severity, 'neutral') }}"{% if g.severity in ('CRITICAL', 'HIGH', 'MEDIUM') %} open{% endif %}>
+    <summary><span class="sev-name">{{ g.severity | capitalize }}</span><span class="count">{{ g.count }}</span></summary>
+    <ul class="findings">
+      {% for f in g.findings %}
+      <li class="finding">
+        <div class="finding-head">
+          <strong>{{ f.title }}</strong>
+          {% if f.count > 1 %}<span class="tag">{{ f.count }} places</span>{% endif %}
+          <span class="source">{% if f.source == 'llm' %}{{ icon('sparkle') }}AI{% if f.confidence is not none %} · {{ '%.2f' | format(f.confidence) }}{% endif %}{% else %}{{ f.source }}{% endif %}</span>
+        </div>
+        <p class="finding-where">{% for file, lines in f.files.items() %}<code>{{ file }}{% if lines %}:{{ lines | join(', ') }}{% endif %}</code>{% endfor %}</p>
+        {% if f.description %}<p class="finding-desc">{{ f.description }}</p>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% else %}
+  <p class="empty">{{ glyph('check') }} No findings.</p>
+  {% endfor %}
+</section>
+{% endif %}
 {% endif %}
 
 {% if decisions | length > 1 %}
-<section>
-  <h2>Earlier decisions</h2>
-  <table>
-    <thead><tr><th>When</th><th>Commit</th><th>Decision</th><th>Confidence</th><th>Outcome</th><th>Why</th></tr></thead>
-    <tbody>
+<section class="card" aria-labelledby="history-title">
+  <header class="card-head">
+    <h2 id="history-title">Earlier decisions</h2>
+    <span class="aside">{{ decisions | length - 1 }}</span>
+  </header>
+  <ol class="rows">
     {% for old in decisions[1:] %}
-      <tr>
-        <td class="muted when">{{ old.created_at | when }}</td>
-        <td><code>{{ old.head_sha[:12] }}</code></td>
-        <td>{{ verdict_badge(old.verdict) }}</td>
-        <td>{{ '%.2f' | format(old.confidence) }}</td>
-        <td>{{ outcome(old.outcome) }}</td>
-        <td>{{ old.reasons | join(' · ') }}</td>
-      </tr>
+    <li class="row">
+      <div class="row-head">
+        <span class="row-title">{{ old.reasons | first }}</span>
+        {{ verdict_pill(old.verdict) }}
+      </div>
+      <div class="row-meta">
+        <span>{{ icon('commit') }}{{ sha(old.head_sha) }}</span>
+        {% if old.score is not none %}<span>score <strong class="num">{{ '%.1f' | format(old.score) }}</strong></span>{% endif %}
+        <span>confidence <strong class="num">{{ '%.2f' | format(old.confidence) }}</strong></span>
+        {{ outcome_text(old.outcome) }}
+        {{ time_ago(old.created_at) }}
+      </div>
+    </li>
     {% endfor %}
-    </tbody>
-  </table>
+  </ol>
 </section>
 {% endif %}
 
-<section>
-  <h2>Audit trail</h2>
+<section class="card" aria-labelledby="trail-title">
+  <header class="card-head">
+    <h2 id="trail-title">Audit trail</h2>
+    <a class="aside" href="/audit?repo={{ pr.repo | urlencode }}">Repository's audit log {{ icon('arrow-right') }}</a>
+  </header>
   {% if events %}
-  <table>
-    <thead><tr><th>When</th><th>Who</th><th>What</th><th>Commit</th><th>Details</th></tr></thead>
-    <tbody>
-    {% for e in events %}
-      <tr>
-        <td class="muted when">{{ e.at | when }}</td>
-        <td>{{ e.actor }}</td>
-        <td><code>{{ e.action }}</code></td>
-        <td>{% if e.head_sha %}<code>{{ e.head_sha[:12] }}</code>{% endif %}</td>
-        <td>{{ details(e.details) }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% else %}<p class="muted">Nothing recorded yet.</p>{% endif %}
+  <ol class="timeline">
+    {% for e in events %}{{ audit_event(e, show_pr=false) }}{% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty">Nothing recorded yet.</p>
+  {% endif %}
 </section>
 {% endblock %}

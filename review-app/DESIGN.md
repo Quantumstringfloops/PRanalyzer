@@ -18,9 +18,10 @@ Goals:
 - Run locally with a few documented commands, using SQLite and no other services.
 
 Non-goals for now:
-- User accounts, login, payments. The only credentials are the GitHub App's: its private key,
-  its webhook secret and the installation tokens minted from them. The dashboard is read-only
-  and bound to loopback, and anything more needs the user's decision first.
+- User accounts of its own, and payments. Acting on GitHub uses only the GitHub App's
+  credentials: its private key, its webhook secret and the installation tokens minted from them.
+  Dashboard login (added on the user's request, 2026-11-08) leaves accounts and passwords to
+  Supabase Auth: see "Dashboard login" below.
 - Running untrusted PR code. pr-analyzer only reads diffs and file contents. Semgrep scans
   copies of the files, and pip-audit runs with `--no-deps --disable-pip`.
 
@@ -50,12 +51,68 @@ Non-goals for now:
 | `actions.py` | Carries out a decision: check run, review request, merge (with the fail-safe gates) |
 | `worker.py` | Claims jobs and runs analyze → decide → act |
 | `web.py` | Two FastAPI apps: the webhook receiver and the read-only dashboard |
+| `view.py` | The dashboard's labels, tones, relative times and grouping of findings, as pure functions |
+| `auth.py` | Dashboard login: Supabase Auth's REST API, the access-token check, the allowlist, throttling |
 | `cli.py` | `review-app webhook / dashboard / worker / analyze / check-config / audit-verify` |
 
 The webhook server and the dashboard are separate apps on separate ports. Only the webhook
 port is meant to be forwarded from the internet (smee.io, a tunnel). The dashboard holds no
-secrets, opens the database read-only, refuses to bind to anything but loopback, and accepts
-only `localhost` / `127.0.0.1` Host headers, against DNS rebinding.
+GitHub credentials and opens the database read-only. Without login, it refuses to bind to anything
+but loopback, and accepts only `localhost` / `127.0.0.1` Host headers, against DNS rebinding.
+
+### Dashboard login
+
+Login is off until Supabase is configured. A half-configured login stops the dashboard from
+starting, and so do extra host names without a login, so it can't end up exposed by mistake.
+
+- **Accounts:** Supabase Auth keeps the accounts and passwords. review-app calls its REST API
+  with the anon (publishable) key, never the service-role key, and stores no user data.
+- **Who gets in:** only addresses on `REVIEW_APP_ADMIN_EMAILS` (or `@domain` entries). Other
+  addresses are refused before Supabase is called, with the same message as a wrong password.
+  The list is checked again on every request.
+- **Sessions:**
+  - Supabase's access token and refresh token live in HttpOnly, `SameSite=Lax` cookies, which
+    are `Secure` off localhost.
+  - Each request checks the access token locally against the project's JWKS (ES256/RS256), or
+    against the legacy HS256 secret when one is configured.
+  - Issuer, audience (`authenticated`) and expiry are checked too.
+  - An expired token is refreshed once and the new cookies are set.
+- **Writes:** the only POSTs are `/auth/login`, `/auth/logout` and `/auth/refresh`. A POST whose
+  `Origin` (or `Referer`) names another site is refused. Everything else stays GET-only.
+- **Abuse:** five failed sign-ins per client and address lock that pair out for 15 minutes.
+  Supabase rate-limits too.
+- **Not recorded in the audit log:** sign-ins and sign-outs, because the dashboard's database
+  connection is read-only. They go to the dashboard's log instead.
+- **Deliberately missing:** a sign-up endpoint (anyone could register an allowlisted address
+  first if email confirmation were off) and password reset. Both are done in Supabase.
+
+The dashboard is server-rendered HTML (Jinja2) with one stylesheet, designed after the shadcn/ui
+preset `b4N1arr72`:
+- style Nova, mauve base and theme, purple chart colors, radius 0.625rem;
+- Oxanium for headings and text, and Tabler icons;
+- the preset's own color tokens, under their shadcn names.
+
+Its CSP allows no script and no inline style, so it has neither. Every effect is CSS alone:
+- **3D tilt:** a card tilts toward the pointer through nine invisible hover zones and `:has()`.
+- **The cube:** it spins in 3D and comes apart on hover.
+- **Backdrop and borders:** a perspective grid and drifting color behind the page, and borders
+  lit by an animated conic gradient.
+- **Shapes:** score bars take their width from `.w0`–`.w100` classes. The activity chart and
+  the score gauge are SVG whose coordinates are computed on the server (`view.py`).
+- **Folding:** findings fold away with `<details>`.
+
+The one outside source is the Oxanium font, from Google Fonts: the CSP allows their stylesheet
+and font files and nothing else. Motion stops under `prefers-reduced-motion`. It has six pages:
+
+- **Overview**: a hero saying whether auto-merge is on, the latest decision on each PR counted
+  by verdict, decisions per day over two weeks, recent decisions, setup health, repositories and
+  the queue.
+- **Sign in**: when dashboard login is on.
+- **Repository**: its policy, drawn as score bands, and its PRs.
+- **Pull request**: the decision with its reasons and confidence factors, the analysis by
+  dimension, findings grouped by severity (repeats folded), earlier decisions and the audit trail.
+- **Audit log**: the hash-chain check, filters, and the entries by day.
+- **Jobs**: the queue's counts and its latest jobs.
 
 ## Flow
 
@@ -160,4 +217,6 @@ row also stores the SHA-256 of the previous row's hash plus its own content, so
 
 - Should files skipped by `ignore_paths` keep blocking auto-merge? (They do now: it's the
   strict reading of "files skipped".)
-- User login for the dashboard, if it ever needs to leave localhost.
+- Dashboard login is built on Supabase Auth, waiting for the user's project. Open questions: should
+  the app's own data (SQLite today) move to the same Supabase Postgres? Should sign-ins also be
+  written to the audit log, which needs a writable connection?

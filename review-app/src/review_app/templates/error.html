@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon %}
+{% block title %}{{ 'Not found' if status == 404 else 'Error' }} · review-app{% endblock %}
+{% block content %}
+<section class="card error-page">
+  <p class="eyebrow">{{ status }}</p>
+  <h1>{{ 'Not found' if status == 404 else 'Something went wrong' }}</h1>
+  <p class="lede">{{ message }}</p>
+  <p><a class="button ghost" href="/">{{ icon('arrow-left') }}Back to the overview</a></p>
+</section>
+{% endblock %}

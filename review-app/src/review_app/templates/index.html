@@ -1,63 +1,154 @@
 {% extends "base.html" %}
-{% from "_macros.html" import verdict_badge, outcome, score %}
+{% from "_macros.html" import icon, glyph, verdict_glyph, pr_row, mode_tag, install_status, empty_state, tilt_zones, cube %}
 {% block content %}
-<h1>Overview</h1>
-
-<section class="panel">
-  <h2>Health</h2>
-  {% if health %}
-  <ul class="health">
-    {% for name, ok, note in health %}
-    <li class="{{ 'ok' if ok else 'bad' }}"><strong>{{ name }}</strong> <span>{{ note }}</span></li>
-    {% endfor %}
-  </ul>
-  {% endif %}
-  <p class="muted">Jobs: {{ jobs.queued }} queued · {{ jobs.running }} running · {{ jobs.failed }} failed ·
-    {{ jobs.done }} done. Policy from {{ policies.source }};
-    {% if policies.auto_repos() %}auto-merge on for {{ policies.auto_repos() | join(', ') }}.{% else %}auto-merge is off everywhere (recommend-only).{% endif %}</p>
+<section class="card hero-card" aria-labelledby="hero-title">
+  <div class="hero-grid" aria-hidden="true"></div>
+  <div class="hero-copy">
+    <p class="eyebrow">{{ icon('bolt') }}Pull request autopilot</p>
+    <h1 id="hero-title">Every pull request,<br><span class="gradient-text">graded and decided.</span></h1>
+    {% if auto_repos %}
+    <p class="lede">Auto-merge on for {{ auto_repos | join(', ') }}: pull requests there that clear every gate are merged through GitHub's merge API, and everything else waits for a person. {{ merged }} merged so far.</p>
+    {% else %}
+    <p class="lede">Recommend-only: review-app grades every pull request and records what it would do, but merges nothing. Auto-merge is switched on per repository in <code>review-app.toml</code>.</p>
+    {% endif %}
+    <div class="hero-chips">
+      <span class="chip">{{ icon('pull-request') }}{{ graded }} graded</span>
+      <span class="chip">{{ icon('merge') }}{{ merged }} merged by the app</span>
+      <span class="chip">{{ icon('link') }}Hash-chained audit log</span>
+    </div>
+  </div>
+  {{ cube() }}
 </section>
 
-<section>
-  <h2>Repositories</h2>
-  {% if repos %}
-  <table>
-    <thead><tr><th>Repository</th><th>Mode</th><th>Open PRs</th><th>Installed</th></tr></thead>
-    <tbody>
-    {% for r in repos %}
-      <tr>
-        <td><a href="/repos/{{ r.full_name }}">{{ r.full_name }}</a></td>
-        <td>{{ policies.for_repo(r.full_name).mode }}{% if not policies.for_repo(r.full_name).enabled %} (off){% endif %}</td>
-        <td>{{ r.open_prs }}</td>
-        <td>{{ 'yes' if r.active else 'no' }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="muted">No repositories yet. Install the GitHub App on one, or run <code>review-app analyze &lt;PR URL&gt;</code>.</p>
-  {% endif %}
+<section class="stats" aria-label="Latest decision on each pull request">
+  <div class="stat tilt tone-none">
+    {{ tilt_zones() }}
+    <div class="tilt-body">
+      <span class="stat-label">{{ glyph('pull-request') }}PRs graded</span>
+      <span class="stat-value">{{ graded }}</span>
+      <span class="stat-note"><span>latest decision on each</span></span>
+    </div>
+  </div>
+  {% for verdict, count, share in split %}
+  <div class="stat tilt tone-{{ verdict_tones[verdict] }}">
+    {{ tilt_zones() }}
+    <div class="tilt-body">
+      <span class="stat-label">{{ verdict_glyph(verdict) }}{{ verdict | verdict }}</span>
+      <span class="stat-value">{{ count }}</span>
+      <span class="stat-note"><span>{{ share }}% of graded</span></span>
+      <span class="meter wide" aria-hidden="true"><span class="fill w{{ share }}"></span></span>
+    </div>
+  </div>
+  {% endfor %}
 </section>
 
-<section>
-  <h2>Recent decisions</h2>
-  {% if decisions %}
-  <table>
-    <thead><tr><th>Pull request</th><th>Score</th><th>Confidence</th><th>Decision</th><th>Outcome</th><th>When</th></tr></thead>
-    <tbody>
-    {% for d in decisions %}
-      <tr>
-        <td><a href="/prs/{{ d.pr_id }}">{{ d.repo }}#{{ d.number }}</a> <span class="muted">{{ d.title }}</span></td>
-        <td>{{ score(d) }}</td>
-        <td>{{ '%.2f' | format(d.confidence) }}{% if not d.complete %} <span class="warn" title="analysis incomplete">incomplete</span>{% endif %}</td>
-        <td>{{ verdict_badge(d.verdict) }}</td>
-        <td>{{ outcome(d.outcome) }}</td>
-        <td class="muted when">{{ d.created_at | when }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="muted">No decisions yet.</p>
-  {% endif %}
-</section>
+<div class="layout even">
+  <section class="card" aria-labelledby="activity-title">
+    <header class="card-head">
+      <h2 id="activity-title">{{ icon('activity') }}Activity</h2>
+      <span class="aside">decisions per day, last {{ activity | length }} days</span>
+    </header>
+    {% set total = activity | sum(attribute=1) %}
+    <div class="chart-figure"><strong>{{ total }}</strong><span>decision{{ 's' if total != 1 }} in {{ activity | length }} days{% if total %} · busiest day {{ chart.top }}{% endif %}</span></div>
+    {% set step = chart.width / ((activity | length) - 1) %}
+    <svg class="area-chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}" role="img" aria-labelledby="activity-title">
+      <defs>
+        <linearGradient id="activity-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" class="stop-top"/><stop offset="100%" class="stop-bottom"/>
+        </linearGradient>
+      </defs>
+      {% for y in (14, chart.height / 2, chart.baseline) %}<line class="gridline" x1="0" x2="{{ chart.width }}" y1="{{ y }}" y2="{{ y }}"/>{% endfor %}
+      <path class="area" d="{{ chart.area }}"/>
+      <path class="line" d="{{ chart.line }}"/>
+      {% for day, count in activity %}
+      {% set x, y = chart.points[loop.index0] %}
+      {% set label = day.day ~ ' ' ~ day.strftime('%b') ~ ' · ' ~ count ~ ' decision' ~ ('s' if count != 1 else '') %}
+      {% set tip_w = label | length * 6.9 + 18 %}
+      {% set tip_x = [[x - tip_w / 2, 0] | max, chart.width - tip_w] | min %}
+      {% set tip_y = y - 36 if y > 40 else y + 12 %}
+      <g class="pt{{ ' has' if count }}{{ ' last' if loop.last }}">
+        <rect class="hit" x="{{ x - step / 2 }}" y="0" width="{{ step }}" height="{{ chart.height }}"/>
+        <line class="guide" x1="{{ x }}" x2="{{ x }}" y1="{{ y }}" y2="{{ chart.height }}"/>
+        <circle class="pt-dot" cx="{{ x }}" cy="{{ y }}" r="4"/>
+        <g class="tip"><rect x="{{ tip_x }}" y="{{ tip_y }}" width="{{ tip_w }}" height="26" rx="7"/><text x="{{ tip_x + 9 }}" y="{{ tip_y + 17 }}">{{ label }}</text></g>
+      </g>
+      {% endfor %}
+    </svg>
+    <div class="chart-axis" aria-hidden="true">
+      {% set first, middle = activity[0][0], activity[(activity | length) // 2][0] %}
+      <span>{{ first.day }} {{ first.strftime('%b') }}</span><span>{{ middle.day }} {{ middle.strftime('%b') }}</span><span>Today</span>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="health-title">
+    <header class="card-head">
+      <h2 id="health-title">{{ icon('shield-check') }}Health</h2>
+      {% if health %}<span class="aside">{{ ready }} of {{ health | length }} ready</span>{% endif %}
+    </header>
+    {% if health %}
+    <ul class="checks">
+      {% for name, ok, note in health %}
+      <li class="check tone-{{ 'good' if ok else 'critical' }}">
+        {{ glyph('check' if ok else 'x') }}
+        <div><strong>{{ name }}</strong><span class="note">{{ note }}</span></div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">No checks were run.</p>
+    {% endif %}
+  </section>
+</div>
+
+<div class="layout">
+  <section class="card" id="decisions" aria-labelledby="decisions-title">
+    <header class="card-head">
+      <h2 id="decisions-title">{{ icon('pull-request') }}Recent decisions</h2>
+      <span class="aside">newest first</span>
+    </header>
+    {% if decisions %}
+    <ol class="rows">
+      {% for d in decisions %}{{ pr_row(d) }}{% endfor %}
+    </ol>
+    {% else %}
+    {% call empty_state('No decisions yet') %}They show up here as pull requests are graded: from GitHub's webhooks, or from <code>review-app analyze &lt;PR URL&gt;</code>.{% endcall %}
+    {% endif %}
+  </section>
+
+  <div class="stack">
+    <section class="card" aria-labelledby="repos-title">
+      <header class="card-head">
+        <h2 id="repos-title">{{ icon('repo') }}Repositories</h2>
+        {% if repos %}<span class="aside">{{ repos | length }}</span>{% endif %}
+      </header>
+      {% if repos %}
+      <ul class="list">
+        {% for r in repos %}
+        <li>
+          <div class="list-head">
+            <a class="strong-link" href="/repos/{{ r.full_name }}">{{ icon('repo') }}{{ r.full_name }}</a>
+            {{ mode_tag(policies.for_repo(r.full_name)) }}
+          </div>
+          <span class="note">{{ r.open_prs }} open PR{{ 's' if r.open_prs != 1 }} · {{ install_status(r) }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty">No repositories yet. Install the GitHub App on one, or run <code>review-app analyze &lt;PR URL&gt;</code>.</p>
+      {% endif %}
+    </section>
+
+    <section class="card" aria-labelledby="queue-title">
+      <header class="card-head">
+        <h2 id="queue-title">{{ icon('layers') }}Queue</h2>
+        <a class="aside" href="/jobs">All jobs {{ icon('arrow-right') }}</a>
+      </header>
+      <div class="mini-stats">
+        {% for status in ('queued', 'running', 'failed', 'done') %}
+        <div class="mini-stat tone-{{ job_tones.get(status, 'neutral') }}"><span class="value">{{ jobs[status] }}</span><span class="label"><span class="dot"></span>{{ status | capitalize }}</span></div>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</div>
 {% endblock %}

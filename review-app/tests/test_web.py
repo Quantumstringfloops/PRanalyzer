@@ -6,10 +6,12 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+    NEW_SHA,
     SHA,
     FakeAccess,
     FakeAnalyzer,
     FakeGateway,
+    make_finding,
     make_outcome,
     make_pull,
     make_result,
@@ -125,10 +127,18 @@ def dashboard(store, policies=None, health=None, host="localhost:8001") -> TestC
     return TestClient(app, base_url=f"http://{host}")
 
 
-def run_one_pr(store, queue, title="Add a helper", outcome=None):
-    queue.enqueue("analyze", "octo/app", 7, SHA, 11)
-    gateway = FakeGateway(make_pull(title=title))
+def run_one_pr(store, queue, title="Add a helper", outcome=None, sha=SHA):
+    queue.enqueue("analyze", "octo/app", 7, sha, 11)
+    gateway = FakeGateway(make_pull(title=title, head_sha=sha))
     Worker(store, queue, PolicyBook(), FakeAnalyzer(outcome), FakeAccess(gateway)).run_once()
+
+
+def stat_counts(page) -> dict[str, int]:
+    """The overview's count per verdict, by the tone each one is drawn in (the PRs-graded tile,
+    toneless, left out)."""
+    found = re.findall(r'<div class="stat tilt tone-(\w+)">.*?<span class="stat-value">(\d+)</span>',
+                       page.text, flags=re.DOTALL)
+    return {tone: int(n) for tone, n in found if tone != "none"}
 
 
 def test_an_empty_dashboard(store):
@@ -143,8 +153,21 @@ def test_the_overview_lists_repositories_and_decisions(store, queue):
     page = dashboard(store, PolicyBook(repos={"octo/app": Policy(mode="auto")})).get("/")
     assert 'href="/repos/octo/app"' in page.text
     assert "octo/app#7" in page.text
-    assert "Merge" in page.text and "merge recommended" in page.text
-    assert "auto-merge on for octo/app" in page.text
+    assert "Merge" in page.text and "Merge recommended" in page.text
+    assert "Auto-merge on for octo/app" in page.text
+    assert stat_counts(page) == {"good": 1, "warning": 0, "critical": 0}
+
+
+def test_the_overview_counts_each_prs_latest_decision(store, queue):
+    blocked = make_outcome(make_result(suggestions=[make_finding("CRITICAL")]))
+    run_one_pr(store, queue, outcome=blocked)
+    run_one_pr(store, queue, outcome=make_outcome(make_result(head_sha=NEW_SHA)), sha=NEW_SHA)
+    page = dashboard(store).get("/")
+    # both decisions are listed, but only the newer one counts
+    assert page.text.count('<li class="row">') == 2
+    assert stat_counts(page) == {"good": 1, "warning": 0, "critical": 0}
+    assert "1 graded" in page.text
+    assert "Recommend-only" in page.text
 
 
 def test_pr_text_is_escaped(store, queue):
@@ -183,6 +206,29 @@ def test_security_headers(store):
     assert "script-src" not in response.headers["content-security-policy"]
 
 
+def test_the_only_outside_source_is_the_font(store):
+    # the preset's Oxanium comes from Google Fonts; nothing else leaves the dashboard
+    policy = dict(directive.strip().split(" ", 1)
+                  for directive in SECURITY_HEADERS["Content-Security-Policy"].split(";"))
+    assert policy["default-src"] == "'none'"
+    assert policy["style-src"] == "'self' https://fonts.googleapis.com"
+    assert policy["font-src"] == "https://fonts.gstatic.com"
+    assert "unsafe" not in SECURITY_HEADERS["Content-Security-Policy"]
+    page = dashboard(store).get("/").text
+    sheets = re.findall(r'<link rel="stylesheet" href="([^"]+)">', page)
+    assert sheets == ["https://fonts.googleapis.com/css2?family=Oxanium:wght@300..800&amp;display=swap",
+                      "/static/style.css"]
+
+
+def test_the_activity_chart(store, queue):
+    run_one_pr(store, queue)
+    page = dashboard(store).get("/").text
+    assert page.count('<g class="pt') == 14                     # one hover target a day
+    assert page.count('<g class="pt has last">') == 1           # today's decision
+    assert "<strong>1</strong><span>decision in 14 days" in page
+    assert re.search(r'<path class="line" d="M[\d. C-]+"/>', page)
+
+
 def test_a_repository_page(store, queue):
     run_one_pr(store, queue)
     page = dashboard(store, PolicyBook(repos={"octo/app": Policy(mode="auto")})).get(
@@ -204,6 +250,22 @@ def test_a_pull_request_page(store, queue):
     assert dashboard(store).get("/prs/999").status_code == 404
 
 
+def test_findings_are_grouped_by_severity_worst_first(store, queue):
+    findings = [make_finding("LOW", title="Magic number", line=3),
+                make_finding("CRITICAL", source="security", title="Hardcoded password"),
+                make_finding("LOW", title="Magic number", line=9),
+                make_finding("MEDIUM", title="Function too complex")]
+    run_one_pr(store, queue, outcome=make_outcome(make_result(suggestions=findings)))
+    page = dashboard(store).get("/prs/1").text
+    groups = re.findall(r'<details class="sev-group tone-\w+"( open)?>\s*<summary>'
+                        r'<span class="sev-name">(\w+)</span>', page)
+    # the worst open, LOW folded away
+    assert groups == [(" open", "Critical"), (" open", "Medium"), ("", "Low")]
+    # the same finding in two places is listed once, with both lines
+    assert page.count("Magic number") == 1
+    assert "2 places" in page and "src/app.py:3, 9" in page
+
+
 def test_the_audit_log_page(store, queue):
     run_one_pr(store, queue)
     client = dashboard(store)
@@ -216,8 +278,16 @@ def test_the_audit_log_page(store, queue):
     assert "No entries match" in client.get("/audit", params={"repo": "octo/other"}).text
 
 
+def test_audit_entries_link_to_their_pull_request(store, queue):
+    run_one_pr(store, queue)
+    store.audit("worker", "installation.created", installation=11)   # no PR to link to
+    page = dashboard(store).get("/audit").text
+    assert 'href="/prs/1">octo/app#7</a>' in page
+    assert "Installation created" in page
+
+
 def audit_ids(page) -> list[int]:
-    return [int(n) for n in re.findall(r'<td class="muted">(\d+)</td>', page.text)]
+    return [int(n) for n in re.findall(r'<li class="event [^"]*" id="entry-(\d+)">', page.text)]
 
 
 def test_the_audit_log_pages_back(store, monkeypatch):
@@ -268,6 +338,41 @@ def test_the_jobs_page_and_health(store, queue):
     assert client.get("/healthz").json()["jobs"]["queued"] == 1
     css = client.get("/static/style.css")
     assert css.headers["content-type"].startswith("text/css")
+    assert client.get("/static/favicon.svg").headers["content-type"].startswith("image/svg+xml")
+
+
+@pytest.mark.parametrize("path", ["/prs/999", "/prs/not-a-number", "/repos/octo/unknown",
+                                  "/static/review-app.db", "/static/..%2Fweb.py", "/nowhere"])
+def test_unknown_addresses_get_the_error_page(store, path):
+    response = dashboard(store).get(path)
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Not found" in response.text
+    assert response.headers["content-security-policy"] == SECURITY_HEADERS[
+        "Content-Security-Policy"]
+
+
+@pytest.mark.parametrize(("path", "current"), [
+    ("/", "/"), ("/repos/octo/app", "/"), ("/prs/1", "/"), ("/audit", "/audit"), ("/jobs", "/jobs"),
+])
+def test_the_nav_marks_the_current_section(store, queue, path, current):
+    run_one_pr(store, queue)
+    page = dashboard(store).get(path).text
+    assert re.findall(r'<a href="([^"]+)" aria-current="page">', page) == [current]
+
+
+def test_no_page_needs_what_the_csp_blocks(store, queue):
+    # the CSP allows no script and no inline style; anything that needs one would silently break
+    outcome = make_outcome(make_result(suggestions=[make_finding("HIGH")],
+                                       warnings=["LLM review skipped: timeout"]))
+    run_one_pr(store, queue, outcome=outcome)
+    queue.enqueue("analyze", "octo/app", 8, SHA, 11)
+    client = dashboard(store, health=[("semgrep", True, "/usr/bin/semgrep")])
+    for path in ("/", "/repos/octo/app", "/prs/1", "/audit", "/jobs", "/prs/999"):
+        page = client.get(path).text
+        assert "<script" not in page and "<style" not in page, path
+        assert not re.search(r"\sstyle=", page), path
+        assert 'href="/static/style.css"' in page, path
 
 
 @pytest.mark.parametrize(("header", "name"), [

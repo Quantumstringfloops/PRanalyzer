@@ -95,8 +95,60 @@ as a `review-app` check run on the commit. To let the app merge in a repository,
 `mode = "auto"` in that repository's table in `review-app.toml`. If you also make the
 `review-app` check required in branch protection, its *block* result stops a merge by anyone.
 
-Only the webhook port should ever be reachable from outside. The dashboard has no login. It
+Only the webhook port should ever be reachable from outside. Without login, the dashboard
 listens on loopback only and answers only to `localhost` addresses.
+
+## Dashboard login (Supabase)
+
+The dashboard can require a sign-in. Supabase Auth keeps the accounts and their passwords, and
+review-app never stores either. Only the addresses you list get in. Once login is set up, the
+dashboard may also be served beyond localhost.
+
+1. **Create a Supabase project** at [supabase.com](https://supabase.com). Email sign-in is on by
+   default (Authentication → Sign In / Providers → Email).
+2. **Turn off public sign-ups** there ("Allow new users to sign up"). The dashboard has no
+   sign-up page, and the allowlist below refuses everyone else anyway.
+3. **Add the admins' accounts** under Authentication → Users → Add user (or Invite user).
+4. **Copy the Project URL and the anon key** (also called the publishable key) from Project
+   Settings → API into `.env`. Don't use the service-role key: review-app never needs it.
+
+   ```bash
+   SUPABASE_URL=https://<project>.supabase.co
+   SUPABASE_ANON_KEY=<the anon / publishable key>
+   REVIEW_APP_ADMIN_EMAILS=you@example.com, @your-team.example
+   ```
+
+   Projects on Supabase's JWT signing keys (the default for new ones) need nothing else.
+   review-app reads the public keys from the project's JWKS. A project still on the legacy JWT
+   secret also needs `SUPABASE_JWT_SECRET` (Project Settings → API → JWT Settings).
+5. **Check it** with `review-app check-config`, then run `review-app dashboard`. Every page now
+   asks you to sign in.
+
+**Serving it beyond localhost.** List the host names it should answer to in
+`REVIEW_APP_DASHBOARD_HOSTS` (for example `review.example.com`), and run
+`review-app dashboard --host 0.0.0.0` behind HTTPS (a reverse proxy, or a tunnel that terminates
+TLS). Keep the original `Host` header when proxying. Off localhost the session cookies are
+`Secure`, so plain http won't keep you signed in. Without login, the dashboard refuses any address
+but loopback.
+
+**How sessions work.** Signing in stores Supabase's access token (valid for an hour by default) and
+refresh token in HttpOnly, `SameSite=Lax` cookies. Every request checks the access token's
+signature, issuer, audience and expiry, and that the address is still on the allowlist. An expired
+token is renewed with the refresh token, and you sign in again after a week. Signing out ends the
+session at Supabase. Five failed sign-ins for an address from one client lock that pair out for
+15 minutes.
+
+| Endpoint | What it does |
+|---|---|
+| `GET /login` | The sign-in page |
+| `POST /auth/login` | Sign in: the page's form, or JSON `{"email", "password"}`. Sets the cookies; JSON clients also get the tokens back |
+| `POST /auth/logout` | End the session at Supabase and clear the cookies |
+| `POST /auth/refresh` | New tokens, from the refresh cookie or JSON `{"refresh_token"}` |
+| `GET /auth/me` | The signed-in user, as JSON (401 when not signed in) |
+
+The dashboard still changes nothing: these are its only POST endpoints. A POST from another site
+(`Origin` set to anything but the dashboard) is refused. JSON clients can send
+`Authorization: Bearer <access token>` instead of cookies.
 
 ## Commands
 
@@ -104,7 +156,7 @@ listens on loopback only and answers only to `localhost` addresses.
 |---|---|
 | `review-app webhook [--port 8000] [--no-worker]` | Receive webhooks, and work through the jobs they queue |
 | `review-app worker` | The worker alone, beside `webhook --no-worker` |
-| `review-app dashboard [--port 8001]` | Read-only dashboard on localhost |
+| `review-app dashboard [--port 8001] [--host ...]` | Read-only dashboard: on localhost, or anywhere once login is set up |
 | `review-app analyze <PR URL> [--post-review]` | Analyse one PR with `GITHUB_TOKEN`, recommend-only |
 | `review-app check-config` | Check `review-app.toml` and the environment, and show each repository's policy |
 | `review-app audit-verify` | Check the audit log's hash chain |

@@ -7,6 +7,7 @@ import threading
 from collections.abc import Callable
 from functools import partial
 from typing import Annotated, NoReturn
+from urllib.parse import urlsplit
 
 import typer
 import uvicorn
@@ -16,6 +17,7 @@ from pr_analyzer.logging_config import setup_logging
 from pr_analyzer.security import tools
 
 from review_app.analysis import SCANNERS, PrAnalyzer
+from review_app.auth import Allowlist
 from review_app.db import Store
 from review_app.github_app import AppAccess, InstallationTokens, TokenAccess
 from review_app.jobs import MAX_ATTEMPTS, Job, JobQueue
@@ -78,7 +80,21 @@ def environment_health(settings: AppSettings, policies: PolicyBook) -> list[tupl
     auto = policies.auto_repos()
     health.append(("Policy", True, f"{policies.source}; auto-merge "
                    + (f"on for {', '.join(auto)}" if auto else "off everywhere")))
+    health.append(login_health(settings))
     return health
+
+
+def login_health(settings: AppSettings) -> tuple[str, bool, str]:
+    if not settings.login_enabled:
+        return ("Dashboard login", True, "off: the dashboard answers on localhost only")
+    problems = settings.login_problems()
+    if problems:
+        return ("Dashboard login", False, "; ".join(problems))
+    admins = len(Allowlist.parse(settings.review_app_admin_emails))
+    hosts = ", ".join(sorted(settings.dashboard_hosts)) or "localhost only"
+    note = (f"Supabase Auth at {urlsplit(settings.supabase_url).netloc}; "
+            f"{admins} admin address{'es' if admins != 1 else ''}; served on {hosts}")
+    return ("Dashboard login", True, note)
 
 
 @app.command()
@@ -115,18 +131,26 @@ def webhook(
 
 @app.command()
 def dashboard(
-    host: Annotated[str, typer.Option(help="Loopback interface to listen on")] = "127.0.0.1",
+    host: Annotated[str, typer.Option(
+        help="Interface to listen on: loopback only, unless dashboard login is set up")
+    ] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="Port for the dashboard")] = 8001,
 ) -> None:
-    """Serve the read-only dashboard on localhost."""
-    if not is_loopback(host):
-        fail("The dashboard has no login, so it only listens on a loopback address "
-             "(127.0.0.1, ::1 or localhost).")
+    """Serve the read-only dashboard: on localhost, or behind a login once it's set up."""
     settings, policies, _ = load()
+    problems = settings.login_problems()
+    if problems:
+        fail("Dashboard login is only partly set up:", *problems,
+             "See README.md, 'Dashboard login'.")
+    login = settings.login()
+    if login is None and not is_loopback(host):
+        fail("The dashboard has no login, so it only listens on a loopback address "
+             "(127.0.0.1, ::1 or localhost). Set up dashboard login to serve it elsewhere.")
     health = environment_health(settings, policies)
     reader = Store(settings.review_app_db, readonly=True)
-    typer.echo(f"Dashboard: http://{'localhost' if host == '127.0.0.1' else host}:{port}/")
-    uvicorn.run(create_dashboard_app(reader, policies, health), host=host, port=port,
+    typer.echo(f"Dashboard: http://{'localhost' if host == '127.0.0.1' else host}:{port}/"
+               + (" (sign-in required)" if login else ""))
+    uvicorn.run(create_dashboard_app(reader, policies, health, login), host=host, port=port,
                 log_level="warning")
 
 
