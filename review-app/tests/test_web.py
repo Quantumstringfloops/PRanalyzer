@@ -1,6 +1,8 @@
 """The two web apps: the webhook receiver over HTTP, and the read-only dashboard."""
 import json
+import re
 import threading
+from pathlib import Path
 
 import pytest
 from conftest import (
@@ -13,8 +15,12 @@ from conftest import (
     make_result,
 )
 from fastapi.testclient import TestClient
+from pr_analyzer.models import FileChange
+from pr_analyzer.security.scanner import DANGEROUS_PATTERNS, SecurityScanner
 from test_webhooks import pr_payload
 
+import review_app
+from review_app import web
 from review_app.db import Store
 from review_app.policy import Policy, PolicyBook
 from review_app.settings import AppSettings
@@ -208,6 +214,51 @@ def test_the_audit_log_page(store, queue):
     assert "decision.made" in filtered.text and "analysis.completed" not in filtered.text
     assert "No entries match" in client.get("/audit", params={"action": "100%_"}).text
     assert "No entries match" in client.get("/audit", params={"repo": "octo/other"}).text
+
+
+def audit_ids(page) -> list[int]:
+    return [int(n) for n in re.findall(r'<td class="muted">(\d+)</td>', page.text)]
+
+
+def test_the_audit_log_pages_back(store, monkeypatch):
+    monkeypatch.setattr(web, "PAGE_SIZE", 2)
+    for n in range(5):
+        store.audit("worker", f"step.{n}")
+    client = dashboard(store)
+
+    first = client.get("/audit")
+    assert audit_ids(first) == [5, 4]
+    assert "before=4" in first.text
+    second = client.get("/audit", params={"before": 4})
+    assert audit_ids(second) == [3, 2]
+    last = client.get("/audit", params={"before": 2})
+    assert audit_ids(last) == [1]
+    assert "Older entries" not in last.text
+
+
+def test_audit_filters_combine(store):
+    for repo, action in [("octo/app", "merge.attempted"), ("Octo/App", "merge.succeeded"),
+                         ("octo/lib", "merge.attempted"), ("octo/app", "decision.made")]:
+        store.audit("worker", action, repo, 7)
+    client = dashboard(store)
+
+    both = client.get("/audit", params={"repo": "octo/app", "action": "merge."})
+    assert audit_ids(both) == [2, 1]        # the repository name is matched ignoring case
+    assert audit_ids(client.get("/audit", params={"repo": "octo/app", "action": "merge.",
+                                                  "before": 2})) == [1]
+    assert audit_ids(client.get("/audit", params={"action": "merge_"})) == []   # _ is literal
+
+
+def test_no_query_is_assembled_with_string_formatting():
+    # the check pr-analyzer runs on every PR here flagged the audit page's f-string query (PR #10)
+    rule = [p for p in DANGEROUS_PATTERNS if p["id"] == "sql-injection"]
+    scanner = SecurityScanner()
+    for path in sorted(Path(review_app.__file__).parent.glob("*.py")):
+        lines = path.read_text(encoding="utf-8").split("\n")
+        patch = f"@@ -0,0 +1,{len(lines)} @@\n" + "\n".join("+" + line for line in lines)
+        added = FileChange(filename=f"review_app/{path.name}", status="added",
+                           additions=len(lines), deletions=0, patch=patch)
+        assert [(s.filename, s.line) for s in scanner.scan_dangerous(added, rule)] == []
 
 
 def test_the_jobs_page_and_health(store, queue):
