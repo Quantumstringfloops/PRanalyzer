@@ -290,9 +290,38 @@ def analyse_twice(store, queue):
 
 def finding_rows(page: str) -> list[tuple[str, str]]:
     """(title, state) for each row of the findings table."""
-    rows = re.findall(r'<a class="cell-link" href="/prs/\d+">([^<]+)</a>.*?'
+    rows = re.findall(r'<a class="cell-link" href="[^"]+"[^>]*>([^<]+)</a>.*?'
                       r'<span class="state state-(\w+)">', page, flags=re.DOTALL)
     return [(title, state) for title, state in rows]
+
+
+def test_a_finding_shows_its_diff_and_opens_on_github(store, queue):
+    patch = "@@ -1,2 +1,3 @@\n import os\n+query = 'SELECT ' + name\n print(query)"
+    changed = FileChange(filename="src/app.py", status="modified", additions=1, deletions=0,
+                         patch=patch)
+    found = make_finding("HIGH", title="Possible SQL injection", line=2)
+    run_one_pr(store, queue, outcome=make_outcome(make_result(files=[changed],
+                                                              suggestions=[found])))
+    on_github = f"https://github.com/octo/app/blob/{SHA}/src/app.py#L2"
+    for path in ("/findings", "/prs/1"):
+        page = dashboard(store).get(path).text
+        # the diff, with the finding's own line lit, opens the file at that line
+        assert f'<a class="diff" href="{on_github}" target="_blank"' in page, path
+        lit = re.findall(r'<span class="diff-row diff-(\w+) hit"><span class="diff-no">(\d+)',
+                         page)
+        assert lit == [("add", "2")], path
+        assert "query = &#39;SELECT &#39; + name" in page, path
+    findings_page = dashboard(store).get("/findings").text
+    assert f'<a class="cell-link" href="{on_github}"' in findings_page
+    assert '<a class="pr-link" href="/prs/1">#7</a>' in findings_page      # our own PR page
+
+
+def test_older_findings_without_a_diff(store, queue):
+    run_one_pr(store, queue, outcome=make_outcome(make_result(
+        suggestions=[make_finding("LOW", line=99)])))          # a line the patch doesn't have
+    page = dashboard(store).get("/findings").text
+    assert '<a class="diff"' not in page
+    assert f"https://github.com/octo/app/blob/{SHA}/src/app.py#L99" in page
 
 
 def test_the_findings_page(store, queue):

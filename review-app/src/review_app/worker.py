@@ -14,6 +14,7 @@ import structlog
 from github import GithubException, RateLimitExceededException
 from pr_analyzer.exceptions import PRAnalyzerError, RateLimitError
 
+from review_app import snippets
 from review_app.actions import MAX_MERGE_ATTEMPTS, Executor
 from review_app.analysis import Analyzer
 from review_app.db import Store, clip, utcnow
@@ -49,21 +50,25 @@ def retry_delay(error: BaseException, attempt: int) -> timedelta | None:
     return None
 
 
-def finding(s: Any) -> dict[str, Any]:
+def finding(s: Any, patch: str | None = None) -> dict[str, Any]:
+    """What's stored of a finding, with the diff lines around it from its file's patch."""
     return {"filename": s.filename, "line": s.line, "severity": s.severity,
             "category": s.category, "title": clip(s.title, 200),
             "description": clip(s.description, 600), "source": s.source,
-            "confidence": s.confidence, "rule_id": s.rule_id}
+            "confidence": s.confidence, "rule_id": s.rule_id,
+            "snippet": snippets.snippet(patch, s.line)}
 
 
 def analysis_summary(outcome: AnalysisOutcome) -> dict[str, Any]:
     result = outcome.result
     score = result.score
+    patches = {f.filename: f.patch for f in result.pr.files}
     return {
         "score": score.overall_score, "grade": score.grade, "passed": score.passed,
         "critical_count": score.critical_count, "high_count": score.high_count,
         "dimensions": score.dimension_scores,
-        "findings": [finding(s) for s in result.suggestions[:MAX_STORED_FINDINGS]],
+        "findings": [finding(s, patches.get(s.filename))
+                     for s in result.suggestions[:MAX_STORED_FINDINGS]],
         "warnings": result.warnings, "llm_provider": result.llm_provider_used,
         "duration": result.duration,
     }

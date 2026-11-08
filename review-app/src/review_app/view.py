@@ -6,7 +6,7 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from review_app.policy import Policy, grade_rank
 
@@ -280,7 +280,8 @@ def track_findings(analyses: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]
                 key = (*base, occurrences.setdefault(base, 0))
                 occurrences[base] += 1
                 first_seen = seen.get(key, {}).get("first_seen", run["created_at"])
-                seen[key] = {**f, "first_seen": first_seen}
+                # the commit it was last seen at: where its file opens on GitHub
+                seen[key] = {**f, "first_seen": first_seen, "head_sha": run.get("head_sha")}
                 if run is latest:
                     current.add(key)
         for key, f in seen.items():
@@ -347,6 +348,17 @@ def hotspots(findings: Iterable[Mapping[str, Any]], limit: int = 25) -> list[dic
                           in shares(entry["counts"]) if share]
         entry["folder"], _, entry["name"] = str(entry["filename"]).rpartition("/")
     return ranked
+
+
+def github_file_url(repo: str, sha: str | None, filename: str | None, line: int | None,
+                    number: int | None = None) -> str:
+    """The finding's file on GitHub, at the commit it was found in, scrolled to its line. Without
+    a commit or a file, the pull request's changed files instead."""
+    if not sha or not filename:
+        return f"https://github.com/{repo}/pull/{number}/files" if number else \
+            f"https://github.com/{repo}"
+    anchor = f"#L{line}" if line else ""
+    return f"https://github.com/{repo}/blob/{sha}/{quote(filename, safe='/')}{anchor}"
 
 
 FILTER_LABELS = {"severity": "Severity", "state": "State", "category": "Category",

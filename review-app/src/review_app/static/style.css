@@ -919,7 +919,10 @@ tbody tr:hover { background: color-mix(in oklch, var(--chart-2) 8%, transparent)
 .data-table td { vertical-align: middle; }
 .data-table tbody tr { position: relative; }
 .data-table tbody tr:hover { box-shadow: inset 3px 0 0 var(--tone); background: color-mix(in oklch, var(--tone) 7%, transparent); }
-.finding-cell { min-width: 260px; max-width: 460px; }
+/* a set width (and the max-width: 0 that makes a table cell keep to it), so a long line of code
+   scrolls inside its diff instead of widening the table */
+.finding-cell { width: 42%; min-width: 300px; max-width: 0; }
+.finding-cell .diff { max-width: 100%; }
 .cell-link { display: block; color: var(--foreground); font-weight: 600; transition: color 0.2s; }
 .cell-link:hover, tr:hover .cell-link { color: var(--chart-2); }
 .cell-sub { display: block; margin-top: 2px; color: var(--muted-foreground); font-size: 11.5px; overflow-wrap: anywhere; }
@@ -935,6 +938,42 @@ tbody tr:hover { background: color-mix(in oklch, var(--chart-2) 8%, transparent)
 .bars.lvl-1 rect:nth-child(-n+1), .bars.lvl-2 rect:nth-child(-n+2),
 .bars.lvl-3 rect:nth-child(-n+3), .bars.lvl-4 rect { fill: var(--tone); }
 .table-note { padding: 12px 16px; color: var(--muted-foreground); font-size: 12px; border-top: 1px solid var(--border); }
+
+/* ── the diff behind a finding ─────────────────────────────────────────────────────────── */
+.file-link { display: inline-flex; align-items: center; gap: 5px; color: var(--muted-foreground); transition: color 0.2s; }
+.file-link .icon { width: 12px; height: 12px; opacity: 0; transform: translate(-3px, 2px); transition: opacity 0.2s, transform 0.25s var(--ease); }
+.file-link:hover { color: var(--chart-2); }
+.file-link:hover .icon { opacity: 1; transform: none; }
+.finding-where .file-link code { padding: 1px 6px; border-radius: var(--radius-sm); background: var(--secondary); color: var(--secondary-foreground); font-size: 11.5px; }
+.diff {
+  position: relative; display: block; margin-top: 8px; max-width: 640px; overflow: hidden;
+  border-radius: var(--radius-md); border: 1px solid var(--border);
+  background: color-mix(in oklch, var(--background) 75%, transparent);
+  font: 12px/1.6 var(--font-mono); color: var(--foreground);
+  transition: border-color 0.25s, box-shadow 0.3s, transform 0.3s var(--ease);
+}
+.diff:hover { border-color: color-mix(in oklch, var(--tone) 55%, var(--border)); box-shadow: 0 14px 30px -18px var(--tone); transform: translateY(-2px); }
+.diff-rows { display: block; overflow-x: auto; padding: 4px 0; }
+.diff-row { display: grid; grid-template-columns: 3.4em 1.2em minmax(0, 1fr); min-width: max-content; }
+.diff-no { padding-right: 8px; text-align: right; color: var(--muted-foreground); opacity: 0.7; user-select: none; }
+.diff-sign { color: var(--muted-foreground); user-select: none; }
+.diff-code { padding-right: 14px; white-space: pre; tab-size: 4; font: inherit; overflow-wrap: normal; }
+.diff-add { background: color-mix(in oklch, var(--good) 11%, transparent); }
+.diff-add .diff-sign { color: var(--good); }
+.diff-del { background: color-mix(in oklch, var(--critical) 11%, transparent); }
+.diff-del .diff-sign { color: var(--critical); }
+.diff-del .diff-code { opacity: 0.75; text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--critical) 50%, transparent); }
+/* the finding's own line: lit in its severity's color, with a marker on the left */
+.diff-row.hit { position: relative; background: color-mix(in oklch, var(--tone) 22%, transparent); box-shadow: inset 3px 0 0 var(--tone); }
+.diff-row.hit .diff-no { color: var(--tone); opacity: 1; font-weight: 700; }
+.diff-row.hit .diff-code { font-weight: 600; }
+.diff-open {
+  position: absolute; top: 6px; right: 6px; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
+  border-radius: 999px; background: var(--popover); border: 1px solid var(--border); color: var(--chart-2);
+  font: 600 11px var(--font-sans); opacity: 0; transform: translateY(-3px); transition: opacity 0.2s, transform 0.25s var(--ease);
+}
+.diff-open .icon { width: 12px; height: 12px; }
+.diff:hover .diff-open, .diff:focus-visible .diff-open { opacity: 1; transform: none; }
 
 /* ── PR triage board ───────────────────────────────────────────────────────────────────── */
 .board { display: grid; grid-template-columns: repeat(4, minmax(240px, 1fr)); gap: 14px; overflow-x: auto; padding-bottom: 6px; align-items: start; }
