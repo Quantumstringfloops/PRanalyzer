@@ -39,6 +39,15 @@ SECURITY_HEADERS = {
 }
 MAX_DELIVERY_ID = 100
 PAGE_SIZE = 100
+# One fixed statement for every filter combination: an empty filter switches its own condition
+# off, so no SQL is ever put together from what a request sends.
+AUDIT_PAGE = (
+    "SELECT * FROM audit_log"
+    " WHERE (:repo = '' OR repo = :repo COLLATE NOCASE)"
+    " AND (:action = '' OR action LIKE :action_prefix ESCAPE '\\')"
+    " AND (:before IS NULL OR id < :before)"
+    " ORDER BY id DESC LIMIT :limit"
+)
 VERDICT_LABELS = {"merge": "Merge", "needs_review": "Needs review", "block": "Block"}
 
 
@@ -117,6 +126,11 @@ def host_name(host_header: str) -> str:
     if host.startswith("["):   # [::1]:8001
         return host.split("]", 1)[0] + "]"
     return host.rsplit(":", 1)[0]
+
+
+def like_prefix(text: str) -> str:
+    """A LIKE pattern for values starting with `text`, its % and _ taken literally."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
 def loads(text: str | None, default: Any) -> Any:
@@ -209,22 +223,11 @@ def create_dashboard_app(store: Store, policies: PolicyBook,
     @app.get("/audit", response_class=HTMLResponse)
     def audit(request: Request, repo: str = "", action: str = "",
               before: int | None = None) -> HTMLResponse:
-        clauses: list[str] = []
-        params: list[object] = []
-        if repo:
-            clauses.append("repo = ? COLLATE NOCASE")
-            params.append(repo)
-        if action:
-            clauses.append("action LIKE ? ESCAPE '\\'")
-            params.append(action.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                          + "%")
-        if before is not None:
-            clauses.append("id < ?")
-            params.append(before)
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with store.read() as conn:
-            rows = conn.execute(f"SELECT * FROM audit_log {where} ORDER BY id DESC LIMIT ?",
-                                (*params, PAGE_SIZE)).fetchall()
+            rows = conn.execute(AUDIT_PAGE, {
+                "repo": repo, "action": action, "action_prefix": like_prefix(action),
+                "before": before, "limit": PAGE_SIZE,
+            }).fetchall()
         intact, bad_row, checked = store.verify_audit_chain()
         return page(request, "audit.html", entries=[{**dict(r), "details": loads(r["details"], {})}
                                                      for r in rows],
