@@ -47,6 +47,31 @@ def test_the_dashboard_starts_on_loopback(served, host):
     assert served[0][1] == {"host": host, "port": 9001, "log_level": "warning"}
 
 
+def test_a_half_set_up_login_stops_the_dashboard(served, monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://proj.supabase.co")
+    result = runner.invoke(cli.app, ["dashboard"])
+    assert result.exit_code == 1
+    assert "only partly set up" in result.output and "SUPABASE_ANON_KEY is not set" in result.output
+    assert served == []
+
+
+def test_with_login_the_dashboard_may_listen_beyond_loopback(served, monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://proj.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon")
+    monkeypatch.setenv("REVIEW_APP_ADMIN_EMAILS", "admin@example.com")
+    monkeypatch.setenv("REVIEW_APP_DASHBOARD_HOSTS", "review.example.com")
+    result = runner.invoke(cli.app, ["dashboard", "--host", "0.0.0.0"])
+    assert result.exit_code == 0, result.output
+    assert "sign-in required" in result.output
+    app, options = served[0]
+    assert options["host"] == "0.0.0.0"
+    assert {"/auth/login", "/auth/logout", "/auth/refresh"} <= {
+        route.path for route in app.routes if hasattr(route, "path")}
+    check = runner.invoke(cli.app, ["check-config"])
+    assert ("ok  Dashboard login: Supabase Auth at proj.supabase.co; 1 admin address; "
+            "served on review.example.com") in check.output
+
+
 def test_the_webhook_server_needs_the_app_credentials(served):
     result = runner.invoke(cli.app, ["webhook"])
     assert result.exit_code == 1

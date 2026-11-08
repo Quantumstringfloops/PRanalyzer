@@ -18,6 +18,9 @@ dependencies = [
     "pydantic-settings>=2.3,<3",
     "pygithub>=2.3,<3",
     "structlog>=24.2,<25",
+    # dashboard login: Supabase Auth's REST API, and checking its access tokens
+    "httpx>=0.27,<1",
+    "pyjwt[crypto]>=2.8,<3",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, glyph %}
+{% block title %}Sign in · review-app{% endblock %}
+{% block content %}
+<section class="card auth-card" aria-labelledby="signin-title">
+  <span class="brand-mark big">{{ icon('merge') }}</span>
+  <h1 id="signin-title">Sign in</h1>
+  {% if login_on %}
+  <p class="lede">The review-app dashboard is for its admins. Use the account an admin set up for you in Supabase.</p>
+  {% if error %}
+  <div class="callout tone-critical" role="alert">
+    {{ glyph('x') }}
+    <div><strong>{{ error }}</strong></div>
+  </div>
+  {% endif %}
+  <form class="auth-form" method="post" action="/auth/login">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label class="field">Email
+      <input type="email" name="email" value="{{ email }}" autocomplete="username" maxlength="320" spellcheck="false" required{% if not email %} autofocus{% endif %}>
+    </label>
+    <label class="field">Password
+      <input type="password" name="password" autocomplete="current-password" maxlength="1024" required{% if email %} autofocus{% endif %}>
+    </label>
+    <button class="button wide" type="submit">Sign in</button>
+  </form>
+  <p class="auth-note">Accounts live in Supabase. Forgot your password? An admin can reset it there.</p>
+  {% else %}
+  <div class="callout tone-info">
+    {{ glyph('shield') }}
+    <div>
+      <strong>Login isn't set up</strong>
+      <p>This dashboard answers on localhost only, so it needs no login. To sign in from elsewhere, set <code>SUPABASE_URL</code>, <code>SUPABASE_ANON_KEY</code> and <code>REVIEW_APP_ADMIN_EMAILS</code>: see "Dashboard login" in the README.</p>
+    </div>
+  </div>
+  <p><a class="button ghost" href="/">{{ icon('arrow-left') }}Back to the overview</a></p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -119,6 +119,10 @@ code { overflow-wrap: anywhere; }
 }
 .mode .icon { width: 14px; height: 14px; }
 .mode-auto { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, var(--surface)); color: var(--accent-ink); }
+.account { display: flex; align-items: center; gap: 10px; margin: 0; }
+.account-email { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 240px; color: var(--ink-2); font-size: 13px; }
+.account-email span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-email .icon { width: 14px; height: 14px; }
 
 /* ── page frame ────────────────────────────────────────────────────────────────────────── */
 .container { max-width: 1200px; margin: 0 auto; padding-left: 24px; padding-right: 24px; }
@@ -408,6 +412,17 @@ a.row-title:hover { color: var(--accent-ink); }
 .button.ghost { background: var(--surface); border-color: var(--line-strong); color: var(--ink); }
 .button.ghost:hover { background: var(--surface-2); filter: none; }
 .button .icon { width: 15px; height: 15px; }
+.button.small { padding: 4px 10px; font-size: 12.5px; }
+.button.wide { width: 100%; justify-content: center; padding: 9px 14px; }
+
+/* ── sign in ───────────────────────────────────────────────────────────────────────────── */
+.auth-card { width: 100%; max-width: 420px; margin: 24px auto 0; display: grid; gap: 14px; padding: 28px; }
+.auth-card h1 { font-size: 22px; }
+.auth-form { display: grid; gap: 14px; }
+.auth-form .field { flex: none; }
+.auth-note { color: var(--muted); font-size: 12.5px; }
+.brand-mark.big { width: 40px; height: 40px; border-radius: 10px; }
+.brand-mark.big .icon { width: 22px; height: 22px; }
 
 /* ── jobs ──────────────────────────────────────────────────────────────────────────────── */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
