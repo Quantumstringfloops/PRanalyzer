@@ -35,7 +35,8 @@ jobs:
       - name: Run PR Analyzer
         uses: ./
         with:
-          # without an OPENAI_API_KEY secret the LLM review is skipped with a warning
-          llm-provider: openai
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          extras: security,openai
+          # the AI review runs on NVIDIA's hosted models (NVIDIA NIM); without an NVIDIA_API_KEY
+          # secret it is skipped, with a note in the review
+          llm-provider: nvidia
+          nvidia-api-key: ${{ secrets.NVIDIA_API_KEY }}
+          extras: security

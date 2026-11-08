@@ -20,7 +20,7 @@ inputs:
     required: false
     default: ${{ github.event.pull_request.html_url }}
   llm-provider:
-    description: openai, anthropic or ollama. Empty, the default, skips the LLM review. With a provider but no key, the review notes that the LLM step was skipped.
+    description: openai, anthropic, nvidia or ollama. Empty, the default, skips the LLM review. With a provider but no key, the review notes that the LLM step was skipped.
     required: false
     default: ""
   llm-model:
@@ -33,6 +33,10 @@ inputs:
     default: ""
   anthropic-api-key:
     description: API key for llm-provider anthropic, e.g. secrets.ANTHROPIC_API_KEY.
+    required: false
+    default: ""
+  nvidia-api-key:
+    description: API key for llm-provider nvidia (NVIDIA NIM's hosted models, a key from build.nvidia.com), e.g. secrets.NVIDIA_API_KEY.
     required: false
     default: ""
   post-review:
@@ -130,6 +134,7 @@ runs:
         LLM_MODEL: ${{ inputs.llm-model }}
         OPENAI_API_KEY: ${{ inputs.openai-api-key }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        NVIDIA_API_KEY: ${{ inputs.nvidia-api-key }}
         POST_REVIEW: ${{ inputs.post-review }}
         FAIL_ON_BLOCK: ${{ inputs.fail-on-block }}
         CONFIG: ${{ inputs.config }}
