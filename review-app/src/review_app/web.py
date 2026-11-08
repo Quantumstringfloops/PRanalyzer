@@ -123,8 +123,9 @@ JOBS_PAGE = (
 # every analysis of the pull requests analysed since a moment, oldest first: the findings and
 # their states are worked out from these (view.track_findings)
 FINDINGS_ANALYSES = (
-    "SELECT a.pr_id, a.created_at, a.findings, p.repo, p.number, p.title AS pr_title, p.author,"
-    " p.state AS pr_state FROM analyses a JOIN pull_requests p ON p.id = a.pr_id"
+    "SELECT a.pr_id, a.created_at, a.head_sha, a.findings, p.repo, p.number,"
+    " p.title AS pr_title, p.author, p.state AS pr_state"
+    " FROM analyses a JOIN pull_requests p ON p.id = a.pr_id"
     " WHERE a.error IS NULL"
     " AND a.pr_id IN (SELECT pr_id FROM analyses WHERE created_at >= ?) ORDER BY a.id"
 )
@@ -288,6 +289,7 @@ def create_dashboard_app(store: Store, policies: PolicyBook,
         job_tones=view.JOB_TONES, login_on=login is not None, ring=view.ring,
         finding_states=view.FINDING_STATES, finding_types=view.FINDING_TYPES,
         category_icons=view.CATEGORY_ICONS, qs=view.query_string,
+        github_file=view.github_file_url,
     )
     templates = Jinja2Templates(env=env)
     queue = JobQueue(store)

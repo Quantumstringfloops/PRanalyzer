@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import icon, glyph, verdict_glyph, verdict_pill, outcome_text, time_ago, sha, grade_chip, score_meter, audit_event, empty_state, tilt_zones %}
+{% from "_macros.html" import icon, glyph, verdict_glyph, verdict_pill, outcome_text, time_ago, sha, grade_chip, score_meter, audit_event, empty_state, tilt_zones, diff_snippet %}
 {% block title %}{{ pr.repo }}#{{ pr.number }} · review-app{% endblock %}
 {% block content %}
 <nav class="crumbs" aria-label="Breadcrumb">
@@ -154,8 +154,9 @@
           {% if f.count > 1 %}<span class="tag">{{ f.count }} places</span>{% endif %}
           <span class="source">{% if f.source == 'llm' %}{{ icon('sparkle') }}AI{% if f.confidence is not none %} · {{ '%.2f' | format(f.confidence) }}{% endif %}{% else %}{{ f.source }}{% endif %}</span>
         </div>
-        <p class="finding-where">{% for file, lines in f.files.items() %}<code>{{ file }}{% if lines %}:{{ lines | join(', ') }}{% endif %}</code>{% endfor %}</p>
+        <p class="finding-where">{% for file, lines in f.files.items() %}<a class="file-link" href="{{ github_file(pr.repo, analysis.head_sha, file, lines[0] if lines else none) }}" target="_blank" rel="noopener noreferrer" title="Open the file on GitHub"><code>{{ file }}{% if lines %}:{{ lines | join(', ') }}{% endif %}</code>{{ icon('external') }}</a>{% endfor %}</p>
         {% if f.description %}<p class="finding-desc">{{ f.description }}</p>{% endif %}
+        {{ diff_snippet(f.snippet, github_file(pr.repo, analysis.head_sha, f.filename, f.line)) }}
       </li>
       {% endfor %}
     </ul>

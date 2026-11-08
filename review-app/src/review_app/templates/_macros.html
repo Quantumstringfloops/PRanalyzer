@@ -202,6 +202,18 @@
 <span class="severity tone-{{ severity_tones.get(severity, 'neutral') }}"><svg class="bars lvl-{{ level }}" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><rect x="1" y="10" width="3" height="5" rx="1"/><rect x="5" y="7" width="3" height="8" rx="1"/><rect x="9" y="4" width="3" height="11" rx="1"/><rect x="13" y="1" width="3" height="14" rx="1"/></svg>{{ severity | capitalize }}</span>
 {%- endmacro %}
 
+{#- the diff lines behind a finding, its own line lit; a click opens the file on GitHub -#}
+{% macro diff_snippet(rows, url) -%}
+{% if rows %}
+<a class="diff" href="{{ url }}" target="_blank" rel="noopener noreferrer" title="Open the file on GitHub at this line">
+  <span class="diff-rows">
+    {%- for r in rows %}<span class="diff-row diff-{{ {'+': 'add', '-': 'del'}.get(r.kind, 'ctx') }}{{ ' hit' if r.hit }}"><span class="diff-no">{{ r.line or '' }}</span><span class="diff-sign">{{ r.kind if r.kind in ('+', '-') else '' }}</span><code class="diff-code">{{ r.text }}</code></span>{% endfor -%}
+  </span>
+  <span class="diff-open">{{ icon('external') }}Open in GitHub</span>
+</a>
+{% endif %}
+{%- endmacro %}
+
 {% macro state_badge(state) -%}
 <span class="state state-{{ state }}">{{ icon({'pending': 'circle-dashed', 'resolved': 'circle-check'}.get(state, 'dash')) }}{{ finding_states.get(state, state) }}</span>
 {%- endmacro %}

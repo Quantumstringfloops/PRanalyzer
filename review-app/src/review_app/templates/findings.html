@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import icon, empty_state, tilt_zones, severity_bars, state_badge, finding_type, windows_switch %}
+{% from "_macros.html" import icon, empty_state, tilt_zones, severity_bars, state_badge, finding_type, windows_switch, diff_snippet %}
 {% block title %}Findings · review-app{% endblock %}
 {% block content %}
 <header class="page-head split-head">
@@ -78,8 +78,13 @@
       </thead>
       <tbody>
         {% for f in findings %}
+        {% set on_github = github_file(f.repo, f.head_sha, f.filename, f.line, f.number) %}
         <tr class="tone-{{ severity_tones.get(f.severity, 'neutral') }}">
-          <td class="finding-cell"><a class="cell-link" href="/prs/{{ f.pr_id }}">{{ f.title }}</a>{% if f.filename %}<span class="cell-sub mono">{{ f.filename }}{% if f.line %}:{{ f.line }}{% endif %}</span>{% endif %}</td>
+          <td class="finding-cell">
+            <a class="cell-link" href="{{ on_github }}" target="_blank" rel="noopener noreferrer" title="Open the file on GitHub">{{ f.title }}</a>
+            {% if f.filename %}<a class="cell-sub mono file-link" href="{{ on_github }}" target="_blank" rel="noopener noreferrer">{{ f.filename }}{% if f.line %}:{{ f.line }}{% endif %}{{ icon('external') }}</a>{% endif %}
+            {{ diff_snippet(f.snippet, on_github) }}
+          </td>
           <td><a class="pr-link" href="/prs/{{ f.pr_id }}">#{{ f.number }}</a></td>
           <td class="nowrap" title="{{ f.repo }}">{{ f.repo.split('/')[-1] }}</td>
           <td class="nowrap">{{ state_badge(f.state) }}</td>
