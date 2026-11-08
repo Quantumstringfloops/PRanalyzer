@@ -1,23 +1,38 @@
+{% from "_macros.html" import icon %}
+{%- set path = request.url.path -%}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}review-app{% endblock %}</title>
+  <meta name="color-scheme" content="light dark">
+  <title>{% block title %}Overview · review-app{% endblock %}</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header class="top">
-    <a class="brand" href="/">review-app</a>
-    <nav>
-      <a href="/">Overview</a>
-      <a href="/audit">Audit log</a>
-      <a href="/jobs">Jobs</a>
-    </nav>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/">
+        <span class="brand-mark">{{ icon('merge') }}</span>
+        <span>review-app</span>
+      </a>
+      <nav class="nav" aria-label="Main">
+        <a href="/"{% if path == '/' or path.startswith('/repos/') or path.startswith('/prs/') %} aria-current="page"{% endif %}>{{ icon('grid') }}<span>Overview</span></a>
+        <a href="/audit"{% if path.startswith('/audit') %} aria-current="page"{% endif %}>{{ icon('list') }}<span>Audit log</span></a>
+        <a href="/jobs"{% if path.startswith('/jobs') %} aria-current="page"{% endif %}>{{ icon('layers') }}<span>Jobs</span></a>
+      </nav>
+      {% if auto_repos %}
+      <span class="mode mode-auto" title="Auto-merge on for {{ auto_repos | join(', ') }}">{{ icon('merge') }}Auto-merge · {{ auto_repos | length }} repo{{ 's' if auto_repos | length != 1 }}</span>
+      {% else %}
+      <span class="mode" title="review-app merges nothing until auto-merge is switched on for a repository">{{ icon('shield') }}Recommend-only</span>
+      {% endif %}
+    </div>
   </header>
-  <main>
+  <main id="main" class="container">
     {% block content %}{% endblock %}
   </main>
-  <footer>Read-only, local admin view. Nothing here changes GitHub.</footer>
+  <footer class="footer container">Read-only local admin view · nothing here changes GitHub</footer>
 </body>
 </html>

@@ -1,22 +1,158 @@
-{% macro verdict_badge(verdict) -%}
-  <span class="badge {{ verdict or 'none' }}">{{ verdict | verdict }}</span>
+{#- Pieces every page uses. No inline styles or scripts anywhere: the dashboard's CSP allows
+    neither, so bar widths come from the w0–w100 classes and icons are plain inline SVG. -#}
+
+{% macro icon(name) -%}
+<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+{%- if name == 'check' %}<path d="M5 12.5l4.5 4.5L19 7.5"/>
+{%- elif name == 'x' %}<path d="M7 7l10 10M17 7L7 17"/>
+{%- elif name == 'alert' %}<path d="M12 6.5v7"/><path d="M12 17.5h.01"/>
+{%- elif name == 'dash' %}<path d="M7 12h10"/>
+{%- elif name == 'merge' %}<circle cx="7" cy="6" r="2.5"/><circle cx="7" cy="18" r="2.5"/><circle cx="17" cy="12" r="2.5"/><path d="M7 8.5v7"/><path d="M7 8.5c0 2.6 2.4 3.5 7.5 3.5"/>
+{%- elif name == 'shield' %}<path d="M12 3.5l7 2.6v5.6c0 4.1-2.9 7.7-7 8.8-4.1-1.1-7-4.7-7-8.8V6.1l7-2.6z"/>
+{%- elif name == 'shield-check' %}<path d="M12 3.5l7 2.6v5.6c0 4.1-2.9 7.7-7 8.8-4.1-1.1-7-4.7-7-8.8V6.1l7-2.6z"/><path d="M9 12l2.2 2.2L15.5 10"/>
+{%- elif name == 'grid' %}<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>
+{%- elif name == 'list' %}<path d="M9 7h11M9 12h11M9 17h11"/><path d="M4.5 7h.01M4.5 12h.01M4.5 17h.01"/>
+{%- elif name == 'layers' %}<path d="M12 4l8.5 4.5L12 13 3.5 8.5 12 4z"/><path d="M3.5 12.5L12 17l8.5-4.5"/>
+{%- elif name == 'external' %}<path d="M14 5h5v5"/><path d="M19 5l-8 8"/><path d="M17 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h4"/>
+{%- elif name == 'chevron' %}<path d="M9.5 6.5L15 12l-5.5 5.5"/>
+{%- elif name == 'arrow-left' %}<path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/>
+{%- elif name == 'arrow-right' %}<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>
+{%- elif name == 'user' %}<circle cx="12" cy="8.5" r="3.5"/><path d="M5.5 19.5c1.1-3.2 3.6-4.8 6.5-4.8s5.4 1.6 6.5 4.8"/>
+{%- elif name == 'branch' %}<circle cx="7" cy="6" r="2.5"/><circle cx="7" cy="18" r="2.5"/><circle cx="17" cy="7" r="2.5"/><path d="M7 8.5v7"/><path d="M17 9.5c0 4.5-6 4-9.3 6.6"/>
+{%- elif name == 'commit' %}<circle cx="12" cy="12" r="3.5"/><path d="M3.5 12h5M15.5 12h5"/>
+{%- elif name == 'clock' %}<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>
+{%- elif name == 'sparkle' %}<path d="M12 4l1.9 5.1L19 11l-5.1 1.9L12 18l-1.9-5.1L5 11l5.1-1.9L12 4z"/>
+{%- elif name == 'link' %}<path d="M10 14a3.5 3.5 0 0 0 5 0l3-3a3.5 3.5 0 0 0-5-5l-1 1"/><path d="M14 10a3.5 3.5 0 0 0-5 0l-3 3a3.5 3.5 0 0 0 5 5l1-1"/>
+{%- elif name == 'repo' %}<path d="M6 4.5h11.5v15H6A1.5 1.5 0 0 1 4.5 18V6A1.5 1.5 0 0 1 6 4.5z"/><path d="M4.5 16.5A1.5 1.5 0 0 1 6 15h11.5"/>
+{%- elif name == 'activity' %}<path d="M3.5 12h4l2.5-6 4 12 2.5-6h4"/>
+{%- elif name == 'inbox' %}<path d="M4 13.5l2.5-7.5h11l2.5 7.5v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-5z"/><path d="M4 13.5h4.5l1.5 2.5h4l1.5-2.5H20"/>
+{%- elif name == 'file' %}<path d="M13.5 3.5h-6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-10l-5-5z"/><path d="M13.5 3.5v5h5"/>
+{%- endif %}</svg>
 {%- endmacro %}
 
-{% macro outcome(value) -%}
-  {% if value %}<span class="outcome {{ value }}">{{ value | replace('_', ' ') }}</span>{% else %}—{% endif %}
+{#- a status color always comes with an icon and a label, never alone -#}
+{% macro glyph(name) -%}<span class="glyph">{{ icon(name) }}</span>{%- endmacro %}
+
+{% macro verdict_glyph(verdict) -%}
+{{ glyph({'merge': 'check', 'needs_review': 'alert', 'block': 'x'}.get(verdict, 'dash')) }}
 {%- endmacro %}
 
-{% macro score(row) -%}
-  {% if row.score is not none %}{{ '%.1f' | format(row.score) }} <span class="grade">{{ row.grade }}</span>{% else %}—{% endif %}
+{% macro verdict_pill(verdict) -%}
+<span class="pill tone-{{ verdict_tones.get(verdict, 'none') }}">{{ verdict_glyph(verdict) }}{{ verdict | verdict }}</span>
 {%- endmacro %}
 
-{% macro details(value) -%}
-  {% if value is mapping %}
-    <dl class="details">
-    {% for key, item in value | dictsort %}
-      <dt>{{ key }}</dt>
-      <dd>{% if item is string %}{{ item }}{% elif item is iterable and item is not mapping %}{{ item | join('; ') }}{% else %}{{ item }}{% endif %}</dd>
-    {% endfor %}
-    </dl>
-  {% else %}{{ value }}{% endif %}
+{% macro outcome_text(value) -%}
+{% if value %}<span class="outcome tone-{{ outcome_tones.get(value, 'neutral') }}">{{ value | outcome }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro time_ago(stamp, exact=false) -%}
+{% if stamp %}<time datetime="{{ stamp[:19] }}Z" title="{{ stamp | when }}">{{ stamp | clock if exact else stamp | ago }}</time>{% endif %}
+{%- endmacro %}
+
+{% macro sha(value) -%}
+{% if value %}<code class="sha" title="{{ value }}">{{ value[:7] }}</code>{% endif %}
+{%- endmacro %}
+
+{% macro grade_chip(grade, policy) -%}
+<span class="grade tone-{{ grade_tone(grade, policy) }}" title="Grade {{ grade }}">{{ grade }}</span>
+{%- endmacro %}
+
+{% macro score_meter(score, grade, policy, wide=false) -%}
+<span class="score{{ ' wide' if wide }}">
+  <span class="meter tone-{{ score_tone(score, policy) }}" aria-hidden="true"><span class="fill w{{ score | pct }}"></span></span>
+  <strong class="num">{{ '%.1f' | format(score) }}</strong>
+  {%- if grade %} {{ grade_chip(grade, policy) }}{% endif %}
+</span>
+{%- endmacro %}
+
+{% macro mode_tag(policy) -%}
+{% if not policy.enabled %}<span class="tag">{{ icon('dash') }}Switched off</span>
+{%- elif policy.mode == 'auto' %}<span class="tag tag-info">{{ icon('merge') }}Auto-merge</span>
+{%- else %}<span class="tag">{{ icon('shield') }}Recommend-only</span>{% endif %}
+{%- endmacro %}
+
+{% macro install_status(r) -%}
+{% if r is none or r.installation_id is none %}Seen through review-app analyze
+{%- elif r.active %}GitHub App installed{% else %}GitHub App removed{% endif %}
+{%- endmacro %}
+
+{#- one pull request with its latest decision: the overview's and a repository's lists -#}
+{% macro pr_row(r, show_repo=true) -%}
+{% set policy = policies.for_repo(r.repo) %}
+<li class="row">
+  <div class="row-head">
+    <a class="row-title" href="/prs/{{ r.pr_id }}">{{ r.title or 'Untitled pull request' }}</a>
+    {{ verdict_pill(r.verdict) }}
+  </div>
+  <div class="row-meta">
+    <span class="mono">{% if show_repo %}{{ r.repo }}{% endif %}#{{ r.number }}</span>
+    {% if r.state and r.state != 'open' %}<span class="tag">{{ r.state }}</span>{% endif %}
+    {% if r.is_draft %}<span class="tag">draft</span>{% endif %}
+    {% if r.is_fork %}<span class="tag tone-serious">fork</span>{% endif %}
+    {% if r.score is not none %}{{ score_meter(r.score, r.grade, policy) }}{% endif %}
+    {% if r.confidence is not none %}<span>confidence <strong class="num">{{ '%.2f' | format(r.confidence) }}</strong></span>{% endif %}
+    {% if r.complete is not none and not r.complete %}<span class="tag tone-warning">incomplete</span>{% endif %}
+    {{ outcome_text(r.outcome) }}
+    {{ time_ago(r.created_at or r.updated_at) }}
+  </div>
+</li>
+{%- endmacro %}
+
+{#- an audit entry's details, as a definition list that takes the full width -#}
+{% macro kv(value) -%}
+{% if value is mapping %}
+<dl class="kv">
+  {% for key, item in value | dictsort %}
+  <dt>{{ key | replace('_', ' ') }}</dt>
+  <dd>
+    {%- if item is string %}{{ item }}
+    {%- elif item is sameas true %}yes
+    {%- elif item is sameas false %}no
+    {%- elif item is none %}—
+    {%- elif item is mapping %}<code>{{ item | tojson }}</code>
+    {%- elif item is iterable %}
+      {%- if item | length > 1 %}<ul>{% for x in item %}<li>{{ x }}</li>{% endfor %}</ul>
+      {%- elif item | length == 1 %}{{ item | first }}
+      {%- else %}—{% endif %}
+    {%- else %}{{ item }}{% endif -%}
+  </dd>
+  {% endfor %}
+</dl>
+{% else %}<p>{{ value }}</p>{% endif %}
+{%- endmacro %}
+
+{% macro audit_event(e, show_pr=true, exact=false) -%}
+<li class="event tone-{{ action_tone(e.action, e.details) }}" id="entry-{{ e.id }}">
+  <span class="event-dot" aria-hidden="true"></span>
+  <div class="event-body">
+    <div class="event-head">
+      <strong>{{ e.action | action_label }}</strong>
+      <code class="event-code">{{ e.action }}</code>
+      {% if show_pr and e.repo %}
+        {% if e.pr_id %}<a href="/prs/{{ e.pr_id }}">{{ e.repo }}{% if e.pr_number %}#{{ e.pr_number }}{% endif %}</a>
+        {% else %}<span class="muted">{{ e.repo }}{% if e.pr_number %}#{{ e.pr_number }}{% endif %}</span>{% endif %}
+      {% endif %}
+    </div>
+    <div class="event-meta">
+      <span class="mono">#{{ e.id }}</span>
+      <span>{{ icon('user') }}{{ e.actor }}</span>
+      <span>{{ icon('clock') }}{{ time_ago(e.at, exact) }}</span>
+      {% if e.head_sha %}<span>{{ icon('commit') }}{{ sha(e.head_sha) }}</span>{% endif %}
+    </div>
+    {% if e.details %}
+    <details class="event-details">
+      <summary>Details</summary>
+      {{ kv(e.details) }}
+    </details>
+    {% endif %}
+  </div>
+</li>
+{%- endmacro %}
+
+{% macro empty_state(title, name='inbox') -%}
+<div class="empty-state">
+  <span class="empty-icon">{{ icon(name) }}</span>
+  <h3>{{ title }}</h3>
+  <p>{{ caller() }}</p>
+</div>
 {%- endmacro %}

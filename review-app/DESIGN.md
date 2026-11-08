@@ -50,12 +50,25 @@ Non-goals for now:
 | `actions.py` | Carries out a decision: check run, review request, merge (with the fail-safe gates) |
 | `worker.py` | Claims jobs and runs analyze → decide → act |
 | `web.py` | Two FastAPI apps: the webhook receiver and the read-only dashboard |
+| `view.py` | The dashboard's labels, tones, relative times and grouping of findings, as pure functions |
 | `cli.py` | `review-app webhook / dashboard / worker / analyze / check-config / audit-verify` |
 
 The webhook server and the dashboard are separate apps on separate ports. Only the webhook
 port is meant to be forwarded from the internet (smee.io, a tunnel). The dashboard holds no
 secrets, opens the database read-only, refuses to bind to anything but loopback, and accepts
 only `localhost` / `127.0.0.1` Host headers, against DNS rebinding.
+
+The dashboard is server-rendered HTML (Jinja2) with one stylesheet. Its CSP allows no script
+and no inline style, so it has neither: score bars take their width from `.w0`–`.w100` classes,
+and findings fold away with `<details>`. It has five pages:
+
+- **Overview**: whether auto-merge is on, the latest decision on each PR counted by verdict,
+  recent decisions, setup health, repositories and the queue.
+- **Repository**: its policy, drawn as score bands, and its PRs.
+- **Pull request**: the decision with its reasons and confidence factors, the analysis by
+  dimension, findings grouped by severity (repeats folded), earlier decisions and the audit trail.
+- **Audit log**: the hash-chain check, filters, and the entries by day.
+- **Jobs**: the queue's counts and its latest jobs.
 
 ## Flow
 

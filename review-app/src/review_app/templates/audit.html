@@ -1,37 +1,58 @@
 {% extends "base.html" %}
-{% from "_macros.html" import details %}
+{% from "_macros.html" import icon, glyph, audit_event, empty_state %}
 {% block title %}Audit log · review-app{% endblock %}
 {% block content %}
-<h1>Audit log</h1>
-<p class="{{ 'ok' if intact else 'bad' }} chain">
-  {% if intact %}Hash chain intact: {{ checked }} entries check out.
-  {% else %}Hash chain broken at entry {{ bad_row }}: rows were changed, removed or reordered outside the app.{% endif %}
-</p>
+<header class="page-head">
+  <h1>Audit log</h1>
+  <p class="lede">Every decision and action, append-only. Each entry carries a hash of the one before it, so a change made outside the app shows up here.</p>
+</header>
 
-<form class="filters" method="get" action="/audit">
-  <label>Repository <input name="repo" value="{{ repo }}" placeholder="owner/name"></label>
-  <label>Action <input name="action" value="{{ action }}" placeholder="merge."></label>
-  <button type="submit">Filter</button>
+{% if intact %}
+<div class="callout tone-good">
+  {{ glyph('check') }}
+  <div><strong>Hash chain intact</strong><p>All {{ checked }} entries check out.</p></div>
+</div>
+{% else %}
+<div class="callout tone-critical">
+  {{ glyph('x') }}
+  <div><strong>Hash chain broken at entry {{ bad_row }}</strong><p>Rows were changed, removed or reordered outside the app. Entries from there on can't be trusted.</p></div>
+</div>
+{% endif %}
+
+<form class="card filters" method="get" action="/audit" role="search">
+  <label class="field">Repository
+    <input name="repo" value="{{ repo }}" placeholder="owner/name" autocomplete="off" spellcheck="false">
+  </label>
+  <label class="field">Action starts with
+    <input name="action" value="{{ action }}" placeholder="merge." list="action-prefixes" autocomplete="off" spellcheck="false">
+  </label>
+  <datalist id="action-prefixes">
+    {% for prefix in ('decision.', 'merge.', 'analysis.', 'check_run.', 'review.', 'job.', 'pr.', 'installation.') %}<option value="{{ prefix }}"></option>{% endfor %}
+  </datalist>
+  <div class="filter-buttons">
+    <button class="button" type="submit">Filter</button>
+    {% if repo or action or before %}<a class="button ghost" href="/audit">Clear</a>{% endif %}
+  </div>
 </form>
 
-{% if entries %}
-<table>
-  <thead><tr><th>#</th><th>When</th><th>Who</th><th>What</th><th>Pull request</th><th>Details</th></tr></thead>
-  <tbody>
+<section class="card" aria-label="Entries">
+  {% if entries %}
   {% for e in entries %}
-    <tr>
-      <td class="muted">{{ e.id }}</td>
-      <td class="muted when">{{ e.at | when }}</td>
-      <td>{{ e.actor }}</td>
-      <td><code>{{ e.action }}</code></td>
-      <td>{% if e.repo %}{{ e.repo }}{% if e.pr_number %}#{{ e.pr_number }}{% endif %}{% endif %}{% if e.head_sha %} <code>{{ e.head_sha[:12] }}</code>{% endif %}</td>
-      <td>{{ details(e.details) }}</td>
-    </tr>
+    {% set day = e.at[:10] %}
+    {% if loop.changed(day) %}
+      {% if not loop.first %}</ol>{% endif %}
+      <h2 class="day">{{ e.at | day }}<span>{{ day }}</span></h2>
+      <ol class="timeline">
+    {% endif %}
+    {{ audit_event(e, exact=true) }}
+    {% if loop.last %}</ol>{% endif %}
   {% endfor %}
-  </tbody>
-</table>
-{% if next_before %}<p><a href="/audit?repo={{ repo | urlencode }}&amp;action={{ action | urlencode }}&amp;before={{ next_before }}">Older entries</a></p>{% endif %}
-{% else %}
-<p class="muted">No entries{% if repo or action %} match{% endif %}.</p>
-{% endif %}
+  <nav class="pager" aria-label="Pages">
+    {% if before %}<a class="button ghost" href="/audit?repo={{ repo | urlencode }}&amp;action={{ action | urlencode }}">{{ icon('arrow-left') }}Newest</a>{% endif %}
+    {% if next_before %}<a class="button ghost" href="/audit?repo={{ repo | urlencode }}&amp;action={{ action | urlencode }}&amp;before={{ next_before }}">Older entries{{ icon('arrow-right') }}</a>{% endif %}
+  </nav>
+  {% else %}
+  {% call empty_state('No entries' ~ (' match' if repo or action else ''), 'list') %}{% if repo or action %}Nothing in the log matches these filters.{% else %}Entries appear as soon as review-app records anything.{% endif %}{% endcall %}
+  {% endif %}
+</section>
 {% endblock %}

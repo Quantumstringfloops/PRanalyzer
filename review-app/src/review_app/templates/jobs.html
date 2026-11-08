@@ -1,27 +1,46 @@
 {% extends "base.html" %}
+{% from "_macros.html" import icon, time_ago, sha, empty_state %}
 {% block title %}Jobs · review-app{% endblock %}
 {% block content %}
-<h1>Jobs</h1>
-<p class="muted">{% for status, n in counts.items() %}{{ status }} {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
-{% if jobs %}
-<table>
-  <thead><tr><th>#</th><th>Kind</th><th>Pull request</th><th>Commit</th><th>Status</th><th>Tries</th><th>Run after</th><th>Last error</th></tr></thead>
-  <tbody>
-  {% for j in jobs %}
-    <tr>
-      <td class="muted">{{ j.id }}</td>
-      <td>{{ j.kind }}</td>
-      <td>{{ j.repo }}#{{ j.pr_number }}</td>
-      <td>{% if j.head_sha %}<code>{{ j.head_sha[:12] }}</code>{% endif %}</td>
-      <td><span class="status {{ j.status }}">{{ j.status }}</span></td>
-      <td>{{ j.attempts }}</td>
-      <td class="muted when">{{ j.run_after | when }}</td>
-      <td class="muted">{{ j.last_error or '' }}</td>
-    </tr>
+<header class="page-head">
+  <h1>Jobs</h1>
+  <p class="lede">The queue the webhook server fills and the worker works through: one analysis per PR at a time, retried with a backoff when GitHub or the AI review fails.</p>
+</header>
+
+<div class="tiles">
+  {% for status, n in counts.items() %}
+  <div class="tile">
+    <span class="tile-label"><span class="dot tone-{{ job_tones.get(status, 'neutral') }}"></span>{{ status | capitalize }}</span>
+    <span class="tile-value">{{ n }}</span>
+  </div>
   {% endfor %}
-  </tbody>
-</table>
-{% else %}
-<p class="muted">No jobs yet.</p>
-{% endif %}
+</div>
+
+<section class="card{{ ' flush' if jobs }}" aria-label="Latest jobs">
+  {% if jobs %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th scope="col">Job</th><th scope="col">Kind</th><th scope="col">Pull request</th><th scope="col">Commit</th><th scope="col">Status</th><th scope="col">Tries</th><th scope="col">Run after</th><th scope="col">Last error</th></tr>
+      </thead>
+      <tbody>
+        {% for j in jobs %}
+        <tr>
+          <td class="mono muted">#{{ j.id }}</td>
+          <td>{{ j.kind }}</td>
+          <td class="nowrap">{% if j.pr_id %}<a href="/prs/{{ j.pr_id }}">{{ j.repo }}#{{ j.pr_number }}</a>{% else %}{{ j.repo }}#{{ j.pr_number }}{% endif %}</td>
+          <td>{{ sha(j.head_sha) }}</td>
+          <td><span class="tag tone-{{ job_tones.get(j.status, 'neutral') }}">{{ j.status }}</span></td>
+          <td class="num">{{ j.attempts }}</td>
+          <td class="nowrap">{{ time_ago(j.run_after) }}</td>
+          <td class="error-cell">{% if j.last_error %}<span title="{{ j.last_error }}">{{ j.last_error }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  {% call empty_state('No jobs yet', 'layers') %}Jobs are queued when GitHub sends a pull request webhook to <code>review-app webhook</code>. <code>review-app analyze &lt;PR URL&gt;</code> grades one PR directly, without the queue.{% endcall %}
+  {% endif %}
+</section>
 {% endblock %}
