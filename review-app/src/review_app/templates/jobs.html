@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Jobs · review-app{% endblock %}
+{% block content %}
+<h1>Jobs</h1>
+<p class="muted">{% for status, n in counts.items() %}{{ status }} {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+{% if jobs %}
+<table>
+  <thead><tr><th>#</th><th>Kind</th><th>Pull request</th><th>Commit</th><th>Status</th><th>Tries</th><th>Run after</th><th>Last error</th></tr></thead>
+  <tbody>
+  {% for j in jobs %}
+    <tr>
+      <td class="muted">{{ j.id }}</td>
+      <td>{{ j.kind }}</td>
+      <td>{{ j.repo }}#{{ j.pr_number }}</td>
+      <td>{% if j.head_sha %}<code>{{ j.head_sha[:12] }}</code>{% endif %}</td>
+      <td><span class="status {{ j.status }}">{{ j.status }}</span></td>
+      <td>{{ j.attempts }}</td>
+      <td class="muted when">{{ j.run_after | when }}</td>
+      <td class="muted">{{ j.last_error or '' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No jobs yet.</p>
+{% endif %}
+{% endblock %}

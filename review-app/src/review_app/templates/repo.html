@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% from "_macros.html" import verdict_badge, outcome, score %}
+{% block title %}{{ full_name }} · review-app{% endblock %}
+{% block content %}
+<h1>{{ full_name }}</h1>
+<p class="muted">{% if repo %}{{ 'Installed' if repo.active else 'No longer installed' }}{% if repo.default_branch %} · default branch {{ repo.default_branch }}{% endif %}{% else %}Seen through <code>review-app analyze</code> only{% endif %}</p>
+
+<section class="panel">
+  <h2>Policy</h2>
+  <dl class="policy">
+    <dt>Mode</dt><dd>{{ policy.mode }}{% if policy.mode == 'recommend' %} (dry run: merges nothing){% endif %}{% if not policy.enabled %}, app switched off{% endif %}</dd>
+    <dt>Merge when</dt><dd>score ≥ {{ policy.merge_min_score }}, grade ≥ {{ policy.merge_min_grade }}, confidence ≥ {{ policy.merge_min_confidence }}{% if policy.require_llm_review %}, AI review ran{% endif %}</dd>
+    <dt>Block when</dt><dd>blocking findings, score &lt; {{ policy.block_below_score }}, or grade below {{ policy.block_below_grade }}</dd>
+    <dt>Merge method</dt><dd>{{ policy.merge_method }}</dd>
+    <dt>Base branches</dt><dd>{{ policy.base_branches | join(', ') if policy.base_branches else 'the default branch' }}</dd>
+    <dt>Always reviewed</dt><dd>{{ policy.review_paths | join(', ') or 'none' }}</dd>
+    <dt>Reviewers</dt><dd>{{ (policy.reviewers + policy.team_reviewers) | join(', ') or 'none' }}</dd>
+  </dl>
+</section>
+
+<section>
+  <h2>Pull requests</h2>
+  {% if prs %}
+  <table>
+    <thead><tr><th>PR</th><th>State</th><th>Score</th><th>Confidence</th><th>Decision</th><th>Outcome</th><th>Decided</th></tr></thead>
+    <tbody>
+    {% for p in prs %}
+      <tr>
+        <td><a href="/prs/{{ p.id }}">#{{ p.number }}</a> {{ p.title }}{% if p.is_fork %} <span class="warn">fork</span>{% endif %}{% if p.is_draft %} <span class="muted">draft</span>{% endif %}</td>
+        <td>{{ p.state }}</td>
+        <td>{{ score(p) }}</td>
+        <td>{% if p.confidence is not none %}{{ '%.2f' | format(p.confidence) }}{% else %}—{% endif %}</td>
+        <td>{{ verdict_badge(p.verdict) }}</td>
+        <td>{{ outcome(p.outcome) }}</td>
+        <td class="muted when">{{ p.decided_at | when }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No pull requests yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

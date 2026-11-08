@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% from "_macros.html" import verdict_badge, outcome, score %}
+{% block content %}
+<h1>Overview</h1>
+
+<section class="panel">
+  <h2>Health</h2>
+  {% if health %}
+  <ul class="health">
+    {% for name, ok, note in health %}
+    <li class="{{ 'ok' if ok else 'bad' }}"><strong>{{ name }}</strong> <span>{{ note }}</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <p class="muted">Jobs: {{ jobs.queued }} queued · {{ jobs.running }} running · {{ jobs.failed }} failed ·
+    {{ jobs.done }} done. Policy from {{ policies.source }};
+    {% if policies.auto_repos() %}auto-merge on for {{ policies.auto_repos() | join(', ') }}.{% else %}auto-merge is off everywhere (recommend-only).{% endif %}</p>
+</section>
+
+<section>
+  <h2>Repositories</h2>
+  {% if repos %}
+  <table>
+    <thead><tr><th>Repository</th><th>Mode</th><th>Open PRs</th><th>Installed</th></tr></thead>
+    <tbody>
+    {% for r in repos %}
+      <tr>
+        <td><a href="/repos/{{ r.full_name }}">{{ r.full_name }}</a></td>
+        <td>{{ policies.for_repo(r.full_name).mode }}{% if not policies.for_repo(r.full_name).enabled %} (off){% endif %}</td>
+        <td>{{ r.open_prs }}</td>
+        <td>{{ 'yes' if r.active else 'no' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No repositories yet. Install the GitHub App on one, or run <code>review-app analyze &lt;PR URL&gt;</code>.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Recent decisions</h2>
+  {% if decisions %}
+  <table>
+    <thead><tr><th>Pull request</th><th>Score</th><th>Confidence</th><th>Decision</th><th>Outcome</th><th>When</th></tr></thead>
+    <tbody>
+    {% for d in decisions %}
+      <tr>
+        <td><a href="/prs/{{ d.pr_id }}">{{ d.repo }}#{{ d.number }}</a> <span class="muted">{{ d.title }}</span></td>
+        <td>{{ score(d) }}</td>
+        <td>{{ '%.2f' | format(d.confidence) }}{% if not d.complete %} <span class="warn" title="analysis incomplete">incomplete</span>{% endif %}</td>
+        <td>{{ verdict_badge(d.verdict) }}</td>
+        <td>{{ outcome(d.outcome) }}</td>
+        <td class="muted when">{{ d.created_at | when }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No decisions yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

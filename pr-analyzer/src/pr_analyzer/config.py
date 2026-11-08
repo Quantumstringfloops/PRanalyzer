@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     github_rate_limit_max_wait_seconds: float = Field(default=60, ge=0)
 
     # LLM review
-    llm_provider: str = "ollama"      # "ollama" | "openai" | "anthropic"
+    llm_provider: str = "ollama"      # "ollama" | "openai" | "anthropic" | "nvidia"
     llm_model: str = ""               # empty = the provider's default model
     llm_confidence_threshold: float = Field(default=0.5, ge=0, le=1)
     llm_timeout_seconds: float = Field(default=120, gt=0)
@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     ollama_url: str = "http://localhost:11434"
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    # NVIDIA NIM's OpenAI-compatible API: the models hosted on build.nvidia.com by default, or a
+    # NIM container you run yourself at another base URL (a local one may need no key)
+    nvidia_api_key: str = ""
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+    # reasoning models such as Nemotron think before answering when this is on: slower, and the
+    # thinking counts towards LLM_MAX_TOKENS
+    nvidia_thinking: bool = False
 
     # external scanners (skipped with a warning when the tool isn't installed)
     semgrep_config: str = "p/owasp-top-ten"

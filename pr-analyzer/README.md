@@ -375,14 +375,17 @@ Settings come from environment variables or a `.env` file in the directory you r
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `GITHUB_TOKEN` | ✴️ | — | Optional for public repos (unauthenticated: 60 requests/hour). Required for private repos and `--post-review` |
-| `LLM_PROVIDER` | ❌ | `ollama` | `ollama` / `openai` / `anthropic` |
-| `LLM_MODEL` | ❌ | per provider | `llama3.2` / `gpt-4o-mini` / `claude-haiku-5-5` |
+| `LLM_PROVIDER` | ❌ | `ollama` | `ollama` / `openai` / `anthropic` / `nvidia` |
+| `LLM_MODEL` | ❌ | per provider | `llama3.2` / `gpt-4o-mini` / `claude-haiku-5-5` / `nvidia/nemotron-3-super-120b-a12b` |
 | `OLLAMA_URL` | ❌ | `http://localhost:11434` | Where Ollama is listening |
 | `OPENAI_API_KEY` | ✴️ | — | Required if `LLM_PROVIDER=openai` |
 | `ANTHROPIC_API_KEY` | ✴️ | — | Required if `LLM_PROVIDER=anthropic` |
+| `NVIDIA_API_KEY` | ✴️ | — | Required if `LLM_PROVIDER=nvidia` with NVIDIA's hosted models (a key from build.nvidia.com) |
+| `NVIDIA_BASE_URL` | ❌ | `https://integrate.api.nvidia.com/v1` | A NIM container of your own instead of NVIDIA's hosted API |
+| `NVIDIA_THINKING` | ❌ | `false` | Let reasoning models think before answering (slower; counts towards `LLM_MAX_TOKENS`) |
 | `LLM_CONFIDENCE_THRESHOLD` | ❌ | `0.5` | Drop LLM suggestions below this confidence |
 | `LLM_TIMEOUT_SECONDS` | ❌ | `120` | Time limit for one LLM request |
-| `LLM_MAX_TOKENS` | ❌ | `4096` | Response length limit (Anthropic) |
+| `LLM_MAX_TOKENS` | ❌ | `4096` | Response length limit (Anthropic, NVIDIA) |
 | `MAX_DIFF_LINES` | ❌ | `3000` | Diff lines per LLM request; a bigger diff is [reviewed in parts](#big-pull-requests) |
 | `LLM_TOKEN_BUDGET` | ❌ | `200000` | Estimated prompt tokens (characters ÷ 4) one run may send; files past it aren't AI-reviewed, and the report says how many. `0` = no limit |
 | `LLM_MAX_CONCURRENCY` | ❌ | `1` | LLM requests in flight at once when a PR is reviewed in parts |

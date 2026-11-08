@@ -1,0 +1,6 @@
+# the app's local state, and its operator's own settings
+review-app.db
+review-app.db-*
+review-app.toml
+# a GitHub App private key must never be committed
+*.pem

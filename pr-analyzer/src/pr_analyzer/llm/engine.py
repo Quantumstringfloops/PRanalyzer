@@ -1,5 +1,7 @@
 import json
 import re
+import time
+from urllib.parse import urlsplit
 
 import httpx
 import structlog
@@ -19,7 +21,18 @@ DEFAULT_MODELS = {
     "ollama": "llama3.2",
     "openai": "gpt-4o-mini",
     "anthropic": "claude-haiku-5-5",
+    "nvidia": "nvidia/nemotron-3-super-120b-a12b",
 }
+# NVIDIA's hosted API needs a key; a NIM container you run yourself may not
+NVIDIA_HOSTED = "integrate.api.nvidia.com"
+# NVIDIA requests that get a rate limit or a server error are sent again this many times, after
+# the wait the reply asks for (Retry-After) or 1 s, then 2 s; a longer wait isn't worth it
+NVIDIA_RETRIES = 2
+NVIDIA_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+NVIDIA_MAX_RETRY_WAIT_SECONDS = 10.0
+# a reasoning model's thinking can come back before its answer; only what follows it is the reply
+THINK_END = "</think>"
+sleep = time.sleep   # tests replace it
 
 # models don't always stick to the requested vocabulary; map common variants onto it
 SEVERITY_ALIASES = {
@@ -65,10 +78,12 @@ class LLMEngine:
             "openai": self.call_openai,
             "anthropic": self.call_anthropic,
             "ollama": self.call_ollama,
+            "nvidia": self.call_nvidia,
         }
         if provider not in callers:
             raise ConfigError(
-                f"Unknown LLM_PROVIDER {settings.llm_provider!r}: use ollama, openai or anthropic"
+                f"Unknown LLM_PROVIDER {settings.llm_provider!r}: "
+                "use ollama, openai, anthropic or nvidia"
             )
 
         # one request for a diff of up to MAX_DIFF_LINES lines, as before; a bigger diff is split
@@ -86,6 +101,13 @@ class LLMEngine:
         # each reply's suggestions stay apart: only a remark that more than one reply makes can
         # be a repeat, and filter_repeats needs to know which reply made it
         parsed = [self.parse_response(raw) for raw in replies]
+        # a reply that isn't JSON reviewed nothing; without a warning it read as a clean review
+        unreadable = sum(1 for raw in replies if not self.is_json_reply(raw))
+        if unreadable:
+            self.warnings.append(
+                f"{unreadable} of {len(replies)} LLM reply(ies) couldn't be read as JSON, so the "
+                "files in them were not AI-reviewed"
+            )
         per_reply = []
         for items in parsed:
             found = [s for s in (self.to_suggestion(item, pr) for item in items) if s is not None]
@@ -108,7 +130,11 @@ class LLMEngine:
 
     def cache_key(self, provider: str, prompt: str) -> tuple[str, ...]:
         # everything that shapes the reply; the API keys don't, and stay out of the cache
-        endpoint = settings.ollama_url if provider == "ollama" else ""
+        endpoint = ""
+        if provider == "ollama":
+            endpoint = settings.ollama_url
+        elif provider == "nvidia":
+            endpoint = f"{settings.nvidia_base_url} thinking={settings.nvidia_thinking}"
         return (REPLY_FORMAT, provider, self.model_name(provider), str(settings.llm_max_tokens),
                 endpoint, SYSTEM_PROMPT, prompt)
 
@@ -207,6 +233,75 @@ class LLMEngine:
         if not isinstance(data, dict):
             return ""
         return (data.get("message") or {}).get("content", "")
+
+    def call_nvidia(self, prompt: str) -> str:
+        # NVIDIA NIM speaks OpenAI's chat completions API, at build.nvidia.com's hosted endpoint by
+        # default. Plain httpx, so it needs no SDK; the parser below already copes with JSON
+        # wrapped in fences or prose, so no JSON mode is asked for.
+        base_url = settings.nvidia_base_url.rstrip("/")
+        url = base_url + "/chat/completions"
+        headers = {"Accept": "application/json"}
+        if settings.nvidia_api_key:
+            headers["Authorization"] = f"Bearer {settings.nvidia_api_key}"
+        elif urlsplit(base_url).hostname == NVIDIA_HOSTED:
+            raise LLMError("NVIDIA_API_KEY is not set: create a key at build.nvidia.com")
+        payload = {
+            "model": self.model_name("nvidia"),
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": settings.llm_max_tokens,
+            "stream": False,
+            # a model whose chat template has no such switch ignores it
+            "chat_template_kwargs": {"enable_thinking": settings.nvidia_thinking},
+        }
+        data = self._post_nvidia(url, payload, headers)
+
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not choices or not isinstance(choices[0], dict):
+            return ""
+        if choices[0].get("finish_reason") == "length":
+            # a cut-off reply is broken JSON, which used to pass as a review with no findings
+            raise LLMError(f"NVIDIA's reply was cut off at LLM_MAX_TOKENS "
+                           f"({settings.llm_max_tokens}): raise it, or set NVIDIA_THINKING=false")
+        content = str((choices[0].get("message") or {}).get("content") or "")
+        # the thinking may also come inline, before the answer, ended by </think>
+        return content.rsplit(THINK_END, 1)[-1].strip()
+
+    def _post_nvidia(self, url: str, payload: dict, headers: dict[str, str]):
+        retries = 0
+        with httpx.Client(timeout=settings.llm_timeout_seconds, transport=self.transport) as client:
+            while True:
+                try:
+                    response = client.post(url, json=payload, headers=headers)
+                except httpx.HTTPError as e:
+                    raise LLMError(f"Could not reach NVIDIA at {url}: {e}") from e
+
+                status = response.status_code
+                if status in NVIDIA_RETRY_STATUSES and retries < NVIDIA_RETRIES:
+                    wait = self._retry_after(response, default=float(2 ** retries))
+                    if wait <= NVIDIA_MAX_RETRY_WAIT_SECONDS:
+                        log.info("nvidia_retry", status=status, wait=wait)
+                        sleep(wait)
+                        retries += 1
+                        continue
+                if status in (401, 403):
+                    raise LLMError(f"NVIDIA refused the request (HTTP {status}): check "
+                                   "NVIDIA_API_KEY, and that it may use LLM_MODEL")
+                if response.is_error:
+                    raise LLMError(f"NVIDIA returned HTTP {status}: {response.text[:200]}")
+                try:
+                    return response.json()
+                except ValueError as e:
+                    raise LLMError("NVIDIA returned a response that is not JSON") from e
+
+    @staticmethod
+    def _retry_after(response: httpx.Response, default: float) -> float:
+        try:
+            return max(float(response.headers.get("retry-after", default)), 0.0)
+        except ValueError:   # an HTTP date: not worth parsing for a wait this short
+            return default
 
     def parse_response(self, raw: str) -> list[dict]:
         text = (raw or "").strip()

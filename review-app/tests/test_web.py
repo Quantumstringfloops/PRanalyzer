@@ -1,0 +1,227 @@
+"""The two web apps: the webhook receiver over HTTP, and the read-only dashboard."""
+import json
+import threading
+
+import pytest
+from conftest import (
+    SHA,
+    FakeAccess,
+    FakeAnalyzer,
+    FakeGateway,
+    make_outcome,
+    make_pull,
+    make_result,
+)
+from fastapi.testclient import TestClient
+from test_webhooks import pr_payload
+
+from review_app.db import Store
+from review_app.policy import Policy, PolicyBook
+from review_app.settings import AppSettings
+from review_app.web import SECURITY_HEADERS, create_dashboard_app, create_webhook_app, host_name
+from review_app.webhooks import WebhookHandler, sign
+from review_app.worker import Worker
+
+SECRET = "s3cret"
+
+
+def webhook_client(store, queue, secret=SECRET, limit=1_000_000, workers=()):
+    settings = AppSettings(github_webhook_secret=secret, review_app_max_webhook_bytes=limit)
+    return TestClient(create_webhook_app(settings, WebhookHandler(store, queue, 42), workers))
+
+
+def deliver(client, payload=None, *, event="pull_request", delivery="d-1", body=None,
+            secret=SECRET, **headers):
+    body = json.dumps(payload or pr_payload()).encode() if body is None else body
+    sent = {"content-type": "application/json", "x-github-event": event,
+            "x-github-delivery": delivery, "x-hub-signature-256": sign(secret.encode(), body)}
+    sent.update({k.replace("_", "-"): v for k, v in headers.items()})
+    return client.post("/webhook", content=body, headers=sent)
+
+
+def queued(store) -> int:
+    with store.read() as conn:
+        return conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+
+
+# ── webhook receiver ─────────────────────────────────────────────────────────────────────
+def test_a_signed_delivery_queues_an_analysis(store, queue):
+    response = deliver(webhook_client(store, queue))
+    assert response.status_code == 202
+    assert response.json()["message"] == "analysis queued"
+    assert queued(store) == 1
+
+
+@pytest.mark.parametrize("signature", [None, "sha256=" + "0" * 64, "garbage"])
+def test_an_unsigned_or_forged_delivery_is_refused(store, queue, signature):
+    body = json.dumps(pr_payload()).encode()
+    headers = {"content-type": "application/json", "x-github-event": "pull_request",
+               "x-github-delivery": "d-1"}
+    if signature:
+        headers["x-hub-signature-256"] = signature
+    response = webhook_client(store, queue).post("/webhook", content=body, headers=headers)
+    assert response.status_code == 401
+    assert queued(store) == 0
+
+
+def test_a_delivery_signed_with_another_secret_is_refused(store, queue):
+    assert deliver(webhook_client(store, queue), secret="guess").status_code == 401
+
+
+def test_without_a_secret_nothing_is_trusted(store, queue):
+    response = deliver(webhook_client(store, queue, secret=""), secret="")
+    assert response.status_code == 503
+    assert queued(store) == 0
+
+
+def test_only_json_deliveries(store, queue):
+    response = deliver(webhook_client(store, queue),
+                       content_type="application/x-www-form-urlencoded")
+    assert response.status_code == 415
+
+
+def test_an_oversized_delivery_is_refused_unread(store, queue):
+    client = webhook_client(store, queue, limit=100)
+    assert deliver(client).status_code == 413
+    assert queued(store) == 0
+
+
+@pytest.mark.parametrize(("body", "headers"), [
+    (b"not json", {}),
+    (b"[1, 2]", {}),
+    (None, {"x_github_event": ""}),
+    (None, {"x_github_delivery": "x" * 101}),
+    (json.dumps({"action": "opened"}).encode(), {}),   # signed, but no pull_request
+])
+def test_bad_deliveries_are_rejected(store, queue, body, headers):
+    response = deliver(webhook_client(store, queue), body=body, **headers)
+    assert response.status_code == 400
+    assert queued(store) == 0
+
+
+def test_the_worker_runs_with_the_server(store, queue):
+    started, stopped = threading.Event(), threading.Event()
+
+    def worker(stop):
+        started.set()
+        stop.wait(5)
+        stopped.set()
+
+    with webhook_client(store, queue, workers=[worker]) as client:
+        assert started.wait(5)
+        assert client.get("/healthz").json() == {"ok": True}
+    assert stopped.wait(5)
+
+
+# ── dashboard ────────────────────────────────────────────────────────────────────────────
+def dashboard(store, policies=None, health=None, host="localhost:8001") -> TestClient:
+    app = create_dashboard_app(Store(store.path, readonly=True), policies or PolicyBook(), health)
+    return TestClient(app, base_url=f"http://{host}")
+
+
+def run_one_pr(store, queue, title="Add a helper", outcome=None):
+    queue.enqueue("analyze", "octo/app", 7, SHA, 11)
+    gateway = FakeGateway(make_pull(title=title))
+    Worker(store, queue, PolicyBook(), FakeAnalyzer(outcome), FakeAccess(gateway)).run_once()
+
+
+def test_an_empty_dashboard(store):
+    page = dashboard(store, health=[("semgrep", False, "not installed")]).get("/")
+    assert page.status_code == 200
+    assert "No repositories yet" in page.text
+    assert "not installed" in page.text
+
+
+def test_the_overview_lists_repositories_and_decisions(store, queue):
+    run_one_pr(store, queue)
+    page = dashboard(store, PolicyBook(repos={"octo/app": Policy(mode="auto")})).get("/")
+    assert 'href="/repos/octo/app"' in page.text
+    assert "octo/app#7" in page.text
+    assert "Merge" in page.text and "merge recommended" in page.text
+    assert "auto-merge on for octo/app" in page.text
+
+
+def test_pr_text_is_escaped(store, queue):
+    evil = "<script>alert(1)</script>"
+    outcome = make_outcome(make_result(warnings=[f"Skipped 1 file(s): {evil}.js"]))
+    run_one_pr(store, queue, title=evil, outcome=outcome)
+    client = dashboard(store)
+    for path in ("/", "/repos/octo/app", "/prs/1", "/audit"):
+        page = client.get(path)
+        assert evil not in page.text, path
+    assert "&lt;script&gt;" in client.get("/prs/1").text
+
+
+@pytest.mark.parametrize("host", ["localhost:8001", "127.0.0.1:8001", "[::1]:8001", "LOCALHOST"])
+def test_localhost_names_are_served(store, host):
+    assert dashboard(store, host=host).get("/").status_code == 200
+
+
+@pytest.mark.parametrize("host", ["evil.example", "evil.example:8001", "192.168.1.5:8001",
+                                  "localhost.evil.example"])
+def test_other_host_names_are_refused(store, host):
+    # a DNS-rebinding page would arrive with its own host name
+    assert dashboard(store, host=host).get("/").status_code == 403
+
+
+def test_the_dashboard_is_read_only(store):
+    client = dashboard(store)
+    for method in ("post", "put", "delete", "patch"):
+        assert getattr(client, method)("/").status_code == 405
+
+
+def test_security_headers(store):
+    response = dashboard(store).get("/")
+    for name, value in SECURITY_HEADERS.items():
+        assert response.headers[name] == value
+    assert "script-src" not in response.headers["content-security-policy"]
+
+
+def test_a_repository_page(store, queue):
+    run_one_pr(store, queue)
+    page = dashboard(store, PolicyBook(repos={"octo/app": Policy(mode="auto")})).get(
+        "/repos/octo/app")
+    assert page.status_code == 200
+    assert "auto" in page.text and "#7" in page.text
+    assert dashboard(store).get("/repos/octo/unknown").status_code == 404
+
+
+def test_a_pull_request_page(store, queue):
+    outcome = make_outcome(make_result(warnings=["LLM review skipped: timeout"]))
+    run_one_pr(store, queue, outcome=outcome)
+    page = dashboard(store).get("/prs/1")
+    assert page.status_code == 200
+    assert "Needs review" in page.text
+    assert "The analysis is incomplete: pr-analyzer: LLM review skipped: timeout" in page.text
+    assert "Confidence = size" in page.text
+    assert "decision.made" in page.text
+    assert dashboard(store).get("/prs/999").status_code == 404
+
+
+def test_the_audit_log_page(store, queue):
+    run_one_pr(store, queue)
+    client = dashboard(store)
+    page = client.get("/audit")
+    assert "Hash chain intact" in page.text
+    assert "analysis.completed" in page.text
+    filtered = client.get("/audit", params={"action": "decision."})
+    assert "decision.made" in filtered.text and "analysis.completed" not in filtered.text
+    assert "No entries match" in client.get("/audit", params={"action": "100%_"}).text
+    assert "No entries match" in client.get("/audit", params={"repo": "octo/other"}).text
+
+
+def test_the_jobs_page_and_health(store, queue):
+    queue.enqueue("analyze", "octo/app", 7, SHA, 11)
+    client = dashboard(store)
+    assert "octo/app#7" in client.get("/jobs").text
+    assert client.get("/healthz").json()["jobs"]["queued"] == 1
+    css = client.get("/static/style.css")
+    assert css.headers["content-type"].startswith("text/css")
+
+
+@pytest.mark.parametrize(("header", "name"), [
+    ("localhost:8001", "localhost"), ("[::1]:8001", "[::1]"), ("127.0.0.1", "127.0.0.1"),
+    ("Evil.Example:80", "evil.example"), ("", ""),
+])
+def test_host_name(header, name):
+    assert host_name(header) == name
