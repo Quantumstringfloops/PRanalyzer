@@ -150,8 +150,29 @@ def dashboard(
     reader = Store(settings.review_app_db, readonly=True)
     typer.echo(f"Dashboard: http://{'localhost' if host == '127.0.0.1' else host}:{port}/"
                + (" (sign-in required)" if login else ""))
-    uvicorn.run(create_dashboard_app(reader, policies, health, login), host=host, port=port,
-                log_level="warning")
+    app_ = create_dashboard_app(reader, policies, health, login, dashboard_settings(settings))
+    uvicorn.run(app_, host=host, port=port, log_level="warning")
+
+
+def dashboard_settings(settings: AppSettings) -> list[tuple[str, str, str]]:
+    """What the dashboard's Configurations page shows: the settings, never a secret."""
+    provider = analyzer_settings.llm_provider.strip().lower()
+    model = analyzer_settings.llm_model or DEFAULT_MODELS.get(provider, "?")
+    return [
+        ("Database", str(settings.review_app_db), "SQLite; the dashboard opens it read-only"),
+        ("Policy file", str(settings.review_app_policy), "the review standards"),
+        ("Workers", str(settings.review_app_workers), "analyses run at once"),
+        ("Queue poll", f"{settings.review_app_poll_seconds:g} s",
+         "how often an idle worker looks for jobs"),
+        ("Largest webhook", f"{settings.review_app_max_webhook_bytes // 1024} KiB", ""),
+        ("AI review", "off" if settings.review_app_skip_llm else f"{provider} · {model}",
+         "REVIEW_APP_SKIP_LLM switches it off"),
+        ("GitHub App", str(settings.github_app_id or "not set"), "GITHUB_APP_ID"),
+        ("Dashboard login", "Supabase Auth" if settings.login_enabled else "off",
+         "SUPABASE_URL and REVIEW_APP_ADMIN_EMAILS"),
+        ("Dashboard hosts", ", ".join(sorted(settings.dashboard_hosts)) or "localhost only",
+         "REVIEW_APP_DASHBOARD_HOSTS"),
+    ]
 
 
 @app.command("worker")

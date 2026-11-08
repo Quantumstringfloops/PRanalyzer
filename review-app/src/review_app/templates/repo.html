@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import icon, pr_row, mode_tag, install_status, empty_state %}
+{% from "_macros.html" import icon, pr_row, mode_tag, install_status, empty_state, policy_details %}
 {% block title %}{{ full_name }} · review-app{% endblock %}
 {% block content %}
 <nav class="crumbs" aria-label="Breadcrumb">
@@ -27,30 +27,7 @@
     {% else %}— a dry run: decisions are recorded, nothing is merged.{% endif %}
   </p>
 
-  {% set block_at = '%g' | format(policy.block_below_score) %}
-  {% set merge_at = '%g' | format(policy.merge_min_score) %}
-  <div class="scale-wrap">
-    <span class="scale-title">Score bands</span>
-    <div class="scale" aria-hidden="true">
-      <span class="zone tone-critical w{{ policy.block_below_score | pct }}"></span>
-      <span class="zone tone-warning w{{ (policy.merge_min_score - policy.block_below_score) | pct }}"></span>
-      <span class="zone tone-good w{{ (100 - policy.merge_min_score) | pct }}"></span>
-    </div>
-    <ul class="legend">
-      <li class="tone-critical"><span class="dot"></span>Block: under {{ block_at }}</li>
-      <li class="tone-warning"><span class="dot"></span>Needs review: {{ block_at }} to under {{ merge_at }}</li>
-      <li class="tone-good"><span class="dot"></span>Can merge: {{ merge_at }} and up</li>
-    </ul>
-  </div>
-
-  <dl class="gates">
-    <div><dt>Merge when</dt><dd>score ≥ {{ merge_at }}, grade ≥ {{ policy.merge_min_grade }}, confidence ≥ {{ '%g' | format(policy.merge_min_confidence) }}{% if policy.require_llm_review %}, the AI review ran{% endif %}, the analysis was complete, and it's an open, non-draft PR from this repository</dd></div>
-    <div><dt>Block when</dt><dd>blocking findings, score under {{ block_at }}, or grade below {{ policy.block_below_grade }}</dd></div>
-    <div><dt>Merge method</dt><dd>{{ policy.merge_method }}</dd></div>
-    <div><dt>Base branches</dt><dd>{% if policy.base_branches %}{% for b in policy.base_branches %}<code>{{ b }}</code> {% endfor %}{% else %}the default branch{% endif %}</dd></div>
-    <div><dt>Always reviewed</dt><dd>{% for p in policy.review_paths %}<code>{{ p }}</code> {% else %}none{% endfor %}</dd></div>
-    <div><dt>Reviewers</dt><dd>{{ (policy.reviewers + policy.team_reviewers) | join(', ') or 'none' }}</dd></div>
-  </dl>
+  {{ policy_details(policy) }}
 </section>
 
 <section class="card" aria-labelledby="prs-title">

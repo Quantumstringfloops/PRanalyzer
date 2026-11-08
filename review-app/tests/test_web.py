@@ -220,6 +220,161 @@ def test_the_only_outside_source_is_the_font(store):
                       "/static/style.css"]
 
 
+def current_theme(page: str) -> list[str]:
+    return re.findall(r'<a href="/theme/(\w+)\?next=[^"]*" title="[^"]+" class="on" '
+                      r'aria-current="true">', page)
+
+
+def test_the_theme_switch(store):
+    client = dashboard(store)
+    page = client.get("/").text
+    assert '<html lang="en">' in page and current_theme(page) == ["system"]
+    assert '<meta name="color-scheme" content="light dark">' in page
+
+    response = client.get("/theme/dark", params={"next": "/audit?repo=octo/app"},
+                          follow_redirects=False)
+    assert (response.status_code, response.headers["location"]) == (303, "/audit?repo=octo/app")
+    cookie = response.headers["set-cookie"].lower()
+    assert "review_app_theme=dark" in cookie and "httponly" in cookie and "samesite=lax" in cookie
+    page = client.get("/audit").text
+    assert '<html lang="en" data-theme="dark">' in page and current_theme(page) == ["dark"]
+    assert '<meta name="color-scheme" content="dark">' in page
+    assert 'href="/theme/light?next=/audit"' in page          # each link comes back here
+
+    client.get("/theme/system", follow_redirects=False)       # forget the choice
+    assert '<html lang="en">' in client.get("/").text
+
+
+@pytest.mark.parametrize(("target", "expected"), [
+    ("/prs/1", "/prs/1"), ("//evil.example", "/"), ("https://evil.example", "/"),
+    ("/login?next=%2Fprs%2F1", "/login?next=%2Fprs%2F1"), ("/login\\evil", "/"),
+])
+def test_the_theme_switch_only_returns_to_pages_here(store, target, expected):
+    response = dashboard(store).get("/theme/light", params={"next": target},
+                                    follow_redirects=False)
+    assert response.headers["location"] == expected
+
+
+def test_unknown_themes(store):
+    client = dashboard(store)
+    assert client.get("/theme/neon").status_code == 404
+    client.cookies.set("review_app_theme", "neon")             # a cookie set by hand
+    assert current_theme(client.get("/").text) == ["system"]
+
+
+def test_a_chosen_dark_theme_gets_every_dark_token():
+    # the dark tokens are written twice: for a dark system, and for dark chosen with the switch
+    css = (Path(review_app.__file__).parent / "static" / "style.css").read_text(encoding="utf-8")
+    system = re.search(r':root:not\(\[data-theme="light"\]\) \{(.*?)\n  \}', css, re.DOTALL)
+    chosen = re.search(r':root\[data-theme="dark"\] \{(.*?)\n\}', css, re.DOTALL)
+    assert system and chosen
+
+    def declarations(block: str) -> dict[str, str]:
+        return dict(re.findall(r"^\s*([\w-]+): (.+);$", block, re.MULTILINE))
+
+    assert declarations(system.group(1)) == declarations(chosen.group(1))
+    assert len(declarations(chosen.group(1))) > 30
+
+
+# ── findings across pull requests, and the pages around them ─────────────────────────────
+def analyse_twice(store, queue):
+    """PR 7 analysed at two commits: the first finds a hardcoded password, the second doesn't."""
+    first = [make_finding("CRITICAL", source="security", title="Hardcoded password", line=4),
+             make_finding("LOW", title="Magic number", line=9)]
+    run_one_pr(store, queue, outcome=make_outcome(make_result(suggestions=first)))
+    second = [make_finding("LOW", title="Magic number", line=11),
+              make_finding("HIGH", source="llm", title="Token logged", line=20)]
+    run_one_pr(store, queue, sha=NEW_SHA,
+               outcome=make_outcome(make_result(suggestions=second, head_sha=NEW_SHA)))
+
+
+def finding_rows(page: str) -> list[tuple[str, str]]:
+    """(title, state) for each row of the findings table."""
+    rows = re.findall(r'<a class="cell-link" href="/prs/\d+">([^<]+)</a>.*?'
+                      r'<span class="state state-(\w+)">', page, flags=re.DOTALL)
+    return [(title, state) for title, state in rows]
+
+
+def test_the_findings_page(store, queue):
+    analyse_twice(store, queue)
+    page = dashboard(store).get("/findings").text
+    # the open PR's current findings are pending; the password a later commit removed, resolved
+    assert sorted(finding_rows(page)) == [("Hardcoded password", "resolved"),
+                                          ("Magic number", "pending"), ("Token logged", "pending")]
+    assert "Findings (3)" in page
+    kpis = re.findall(r'<strong class="kpi-value">([^<]+)</strong>', page)
+    assert kpis == ["2", "50%", "2"]      # 2 high-severity, 1 of them resolved, in 1 PR
+    assert 'href="?days=7"' in page and 'class="on" aria-current="true">30 days' in page
+
+
+def test_the_findings_page_filters_and_searches(store, queue):
+    analyse_twice(store, queue)
+    client = dashboard(store)
+    assert finding_rows(client.get("/findings", params={"state": "resolved"}).text) == [
+        ("Hardcoded password", "resolved")]
+    assert finding_rows(client.get("/findings", params={"type": "llm"}).text) == [
+        ("Token logged", "pending")]
+    page = client.get("/findings", params={"severity": "low", "q": "magic"}).text
+    assert finding_rows(page) == [("Magic number", "pending")]
+    # each filter in use is a chip whose link drops just that filter
+    assert 'href="/findings?days=30&amp;q=magic"' in page and "Severity: low" in page
+    assert "No findings match" in client.get("/findings", params={"q": "nothing like it"}).text
+
+
+def test_the_triage_board(store, queue):
+    run_one_pr(store, queue)
+    blocked = make_outcome(make_result(passed=False, suggestions=[make_finding("CRITICAL")]))
+    queue.enqueue("analyze", "octo/app", 8, SHA, 11)
+    gateway = FakeGateway(make_pull(number=8, title="Rewrite the session handling"))
+    Worker(store, queue, PolicyBook(), FakeAnalyzer(blocked), FakeAccess(gateway)).run_once()
+    page = dashboard(store).get("/triage").text
+    lanes = dict(re.findall(r'<h2 id="lane-(\w+)">.*?</h2>\s*<span class="count">(\d+)</span>',
+                            page, flags=re.DOTALL))
+    assert lanes == {"needs_review": "0", "block": "1", "merge": "1", "done": "0"}
+    assert "Rewrite the session handling" in page and 'href="/prs/2"' in page
+
+
+def test_repositories_standards_and_map(store, queue):
+    analyse_twice(store, queue)
+    policies = PolicyBook(repos={"octo/app": Policy(mode="auto", merge_min_score=93)})
+    client = dashboard(store, policies)
+    repos = client.get("/repos").text
+    assert 'href="/repos/octo/app"' in repos and "Open findings" in repos
+    standards = client.get("/standards").text
+    assert "Defaults" in standards and '[repos."octo/app"]' in standards
+    assert "Can merge: 93 and up" in standards and "Can merge: 90 and up" in standards
+    spots = client.get("/map").text
+    assert 'class="hot-total num">2</strong>' in spots     # src/app.py: two open findings
+    assert "app.py" in spots and "Hardcoded password" not in spots
+
+
+def test_configurations_and_integrations(store):
+    config = [("Database", "review-app.db", ""), ("Workers", "1", "one analysis at a time")]
+    health = [("GitHub App", False, "GITHUB_APP_ID is not set"), ("semgrep", True, "/bin/semgrep")]
+    app = create_dashboard_app(Store(store.path, readonly=True), PolicyBook(), health,
+                               config=config)
+    client = TestClient(app, base_url="http://localhost:8001")
+    settings_page = client.get("/config").text
+    assert "<code>review-app.db</code>" in settings_page and "one analysis at a time" in settings_page
+    cards = client.get("/integrations").text
+    states = re.findall(r'<h2 id="int-\d+">([^<]+)</h2>\s*<span class="tag[^"]*">([^<]+)</span>',
+                        cards)
+    assert states == [("GitHub App", "Needs setup"), ("NVIDIA NIM", "Not checked"),
+                      ("Semgrep", "Ready"), ("pip-audit", "Not checked"),
+                      ("Supabase Auth", "Not checked")]
+    assert "No settings to show" in dashboard(store).get("/config").text
+
+
+def test_search(store, queue):
+    analyse_twice(store, queue)
+    client = dashboard(store)
+    page = client.get("/search", params={"q": "token"}).text
+    assert "Token logged" in page and "Results for “token”" in page
+    assert 'href="/prs/1"' in client.get("/search", params={"q": "#7"}).text
+    assert 'href="/repos/octo/app"' in client.get("/search", params={"q": "octo/"}).text
+    assert "Nothing found" in client.get("/search", params={"q": "100%_"}).text   # literal
+
+
 def test_the_activity_chart(store, queue):
     run_one_pr(store, queue)
     page = dashboard(store).get("/").text
@@ -353,12 +508,16 @@ def test_unknown_addresses_get_the_error_page(store, path):
 
 
 @pytest.mark.parametrize(("path", "current"), [
-    ("/", "/"), ("/repos/octo/app", "/"), ("/prs/1", "/"), ("/audit", "/audit"), ("/jobs", "/jobs"),
+    ("/", ["/"]), ("/repos", ["/repos"]), ("/repos/octo/app", ["/repos"]), ("/map", ["/map"]),
+    ("/standards", ["/standards"]), ("/triage", ["/triage"]), ("/prs/1", ["/triage"]),
+    ("/findings", ["/findings"]), ("/audit", ["/audit"]), ("/jobs", ["/jobs"]),
+    ("/config", ["/config"]), ("/integrations", ["/integrations"]), ("/search?q=x", []),
 ])
 def test_the_nav_marks_the_current_section(store, queue, path, current):
     run_one_pr(store, queue)
     page = dashboard(store).get(path).text
-    assert re.findall(r'<a href="([^"]+)" aria-current="page">', page) == [current]
+    assert re.findall(r'<a href="([^"]+)" aria-current="page">', page) == current
+    assert 'aria-disabled="true"' in page and "Workflows" in page     # coming soon, no link
 
 
 def test_no_page_needs_what_the_csp_blocks(store, queue):
@@ -368,7 +527,9 @@ def test_no_page_needs_what_the_csp_blocks(store, queue):
     run_one_pr(store, queue, outcome=outcome)
     queue.enqueue("analyze", "octo/app", 8, SHA, 11)
     client = dashboard(store, health=[("semgrep", True, "/usr/bin/semgrep")])
-    for path in ("/", "/repos/octo/app", "/prs/1", "/audit", "/jobs", "/prs/999"):
+    for path in ("/", "/repos/octo/app", "/prs/1", "/audit", "/jobs", "/prs/999", "/findings",
+                 "/findings?severity=high&q=x", "/triage", "/repos", "/standards", "/map",
+                 "/config", "/integrations", "/search?q=helper"):
         page = client.get(path).text
         assert "<script" not in page and "<style" not in page, path
         assert not re.search(r"\sstyle=", page), path

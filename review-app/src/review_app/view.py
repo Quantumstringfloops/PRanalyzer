@@ -3,9 +3,10 @@ groupings, and the geometry of its SVG charts. Pure functions, so they're tested
 app. (The CSP allows no inline styles, so every shape is computed here and drawn with SVG
 attributes.)"""
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from urllib.parse import urlencode
 
 from review_app.policy import Policy, grade_rank
 
@@ -245,7 +246,133 @@ def action_label(action: str) -> str:
     return text[:1].upper() + text[1:]
 
 
-# ── findings ─────────────────────────────────────────────────────────────────────────────
+# ── findings across pull requests: the Findings page, search, the software map ──────────
+HIGH_SEVERITIES = frozenset({"CRITICAL", "HIGH"})
+SEVERITY_RANK = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
+FINDING_STATES = {"pending": "Pending", "resolved": "Resolved", "ignored": "Ignored"}
+FINDING_TYPES = {"static": "Static check", "security": "Security scan", "llm": "AI review"}
+CATEGORY_ICONS = {"security": "shield", "complexity": "activity", "style": "brush",
+                  "documentation": "file", "testing": "flask", "performance": "trending",
+                  "dependency": "layers", "dependencies": "layers"}
+
+
+def track_findings(analyses: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Every finding of every pull request, once, with its state:
+    - pending: in the PR's latest analysis, and the PR is still open;
+    - ignored: in the latest analysis of a PR that was merged or closed anyway;
+    - resolved: in an earlier analysis of the PR, and gone from its latest.
+
+    `analyses` are rows (pr_id, repo, number, pr_title, author, pr_state, created_at, findings),
+    oldest first. A finding is known by its rule (or title), file and source, and by which
+    occurrence of those it is, since line numbers move from one commit to the next."""
+    runs_by_pr: dict[int, list[Mapping[str, Any]]] = {}
+    for run in analyses:
+        runs_by_pr.setdefault(run["pr_id"], []).append(run)
+    tracked: list[dict[str, Any]] = []
+    for runs in runs_by_pr.values():
+        latest = runs[-1]
+        seen: dict[tuple[Any, ...], dict[str, Any]] = {}
+        current: set[tuple[Any, ...]] = set()
+        for run in runs:
+            occurrences: dict[tuple[Any, ...], int] = {}
+            for f in run["findings"]:
+                base = (f.get("rule_id") or f.get("title"), f.get("filename"), f.get("source"))
+                key = (*base, occurrences.setdefault(base, 0))
+                occurrences[base] += 1
+                first_seen = seen.get(key, {}).get("first_seen", run["created_at"])
+                seen[key] = {**f, "first_seen": first_seen}
+                if run is latest:
+                    current.add(key)
+        for key, f in seen.items():
+            if key not in current:
+                state = "resolved"
+            else:
+                state = "pending" if latest["pr_state"] == "open" else "ignored"
+            tracked.append({**f, "state": state,
+                            "severity": str(f.get("severity") or "").upper() or "OTHER",
+                            "category": str(f.get("category") or "other").lower(),
+                            "source": str(f.get("source") or "static").lower(),
+                            "pr_id": latest["pr_id"], "repo": latest["repo"],
+                            "number": latest["number"], "pr_title": latest["pr_title"],
+                            "author": latest["author"], "pr_state": latest["pr_state"],
+                            "analysed_at": latest["created_at"]})
+    order = {"pending": 0, "ignored": 1, "resolved": 2}
+    tracked.sort(key=lambda f: (-SEVERITY_RANK.get(f["severity"], 0), order[f["state"]],
+                                -int(f["number"]), str(f.get("title"))))
+    return tracked
+
+
+def findings_summary(findings: Sequence[Mapping[str, Any]], pr_count: int) -> dict[str, Any]:
+    """The Findings page's three figures, over high-severity findings (critical and high)."""
+    high = [f for f in findings if f["severity"] in HIGH_SEVERITIES]
+    resolved = sum(1 for f in high if f["state"] == "resolved")
+    return {"high": len(high),
+            "resolved_pct": round(100 * resolved / len(high)) if high else 0,
+            "per_pr": round(len(high) / pr_count, 1) if pr_count else 0}
+
+
+def filter_findings(findings: Iterable[Mapping[str, Any]], *, severity: str = "",
+                    state: str = "", category: str = "", source: str = "", repo: str = "",
+                    q: str = "") -> list[Mapping[str, Any]]:
+    """The findings that match every filter given; `q` looks in the title, file and PR title."""
+    needle = q.strip().lower()
+    return [f for f in findings
+            if (not severity or f["severity"] == severity.upper())
+            and (not state or f["state"] == state.lower())
+            and (not category or f["category"] == category.lower())
+            and (not source or f["source"] == source.lower())
+            and (not repo or str(f["repo"]).lower() == repo.lower())
+            and (not needle or any(needle in str(f.get(k) or "").lower()
+                                   for k in ("title", "filename", "pr_title", "description")))]
+
+
+def hotspots(findings: Iterable[Mapping[str, Any]], limit: int = 25) -> list[dict[str, Any]]:
+    """The files with the most open findings (pending or ignored), worst first, with a count per
+    severity: the software map."""
+    files: dict[tuple[str, str], dict[str, Any]] = {}
+    for f in findings:
+        if f["state"] == "resolved" or not f.get("filename"):
+            continue
+        entry = files.setdefault((str(f["repo"]), str(f["filename"])), {
+            "repo": f["repo"], "filename": f["filename"], "total": 0,
+            "counts": {severity: 0 for severity in SEVERITY_RANK}})
+        entry["total"] += 1
+        if f["severity"] in entry["counts"]:
+            entry["counts"][f["severity"]] += 1
+    ranked = sorted(files.values(), key=lambda e: (-e["total"], e["filename"]))[:limit]
+    top = max((e["total"] for e in ranked), default=0)
+    for entry in ranked:
+        entry["width"] = percent(entry["total"], top)
+        entry["parts"] = [(severity, n, share) for severity, n, share
+                          in shares(entry["counts"]) if share]
+        entry["folder"], _, entry["name"] = str(entry["filename"]).rpartition("/")
+    return ranked
+
+
+FILTER_LABELS = {"severity": "Severity", "state": "State", "category": "Category",
+                 "type": "Type", "repo": "Repository", "q": "Search"}
+
+
+def query_string(params: Mapping[str, Any], **changes: Any) -> str:
+    """The query string for `params` with `changes` made, leaving out empty values: the links
+    that keep a page's other filters."""
+    merged = {**params, **changes}
+    return urlencode({key: value for key, value in merged.items() if value not in ("", None)})
+
+
+def active_filters(params: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """A label and the query without it, for each filter in use: the chips that remove one."""
+    chips = []
+    for key, label in FILTER_LABELS.items():
+        value = str(params.get(key) or "")
+        if not value:
+            continue
+        shown = {"type": FINDING_TYPES, "state": FINDING_STATES}.get(key, {}).get(value, value)
+        chips.append((f"{label}: {shown}", query_string(params, **{key: ""})))
+    return chips
+
+
+# ── findings within one pull request ─────────────────────────────────────────────────────
 def group_findings(findings: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Findings by severity, worst first. The same finding in several places (same title,
     description and source) is listed once, with its places by file."""

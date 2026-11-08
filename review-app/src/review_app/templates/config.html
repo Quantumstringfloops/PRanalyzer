@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, empty_state %}
+{% block title %}Configurations · review-app{% endblock %}
+{% block content %}
+<header class="page-head">
+  <p class="eyebrow">{{ icon('settings') }}Setup</p>
+  <h1>Configurations</h1>
+  <p class="lede">The settings this dashboard started with, read-only. Change them in <code>.env</code> and <code>review-app.toml</code>, then restart. Secrets are never shown.</p>
+</header>
+
+<section class="card" aria-labelledby="config-title">
+  <header class="card-head">
+    <h2 id="config-title">{{ icon('settings') }}Settings</h2>
+    <a class="aside" href="/standards">Review standards {{ icon('arrow-right') }}</a>
+  </header>
+  {% if config %}
+  <dl class="gates config-list">
+    {% for name, value, note in config %}
+    <div><dt>{{ name }}</dt><dd><code>{{ value }}</code>{% if note %}<span class="note">{{ note }}</span>{% endif %}</dd></div>
+    {% endfor %}
+    <div><dt>Policy</dt><dd><code>{{ source }}</code></dd></div>
+  </dl>
+  {% else %}
+  {% call empty_state('No settings to show', 'settings') %}This dashboard was started without them. <code>review-app dashboard</code> fills this page in.{% endcall %}
+  {% endif %}
+</section>
+{% endblock %}

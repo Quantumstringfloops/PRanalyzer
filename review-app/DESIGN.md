@@ -8,6 +8,9 @@ Merging is fail-safe. By default the app only recommends. It merges for real onl
 repository that opts into it, only through GitHub's merge API, and never when the analysis was
 incomplete or the PR comes from a fork.
 
+This file is the design and its reasons. For a plain-language walk-through of how the app
+behaves, see [HOW-IT-WORKS.md](HOW-IT-WORKS.md).
+
 ## Goals and non-goals
 
 Goals:
@@ -102,17 +105,42 @@ Its CSP allows no script and no inline style, so it has neither. Every effect is
 - **Folding:** findings fold away with `<details>`.
 
 The one outside source is the Oxanium font, from Google Fonts: the CSP allows their stylesheet
-and font files and nothing else. Motion stops under `prefers-reduced-motion`. It has six pages:
+and font files and nothing else. Motion stops under `prefers-reduced-motion`.
 
-- **Overview**: a hero saying whether auto-merge is on, the latest decision on each PR counted
+The sidebar is in sections: Codebase, Governance, Review, Activity and Setup. A search box at
+the top looks through repositories, PRs and findings. The pages:
+
+- **Home** (`/`): a hero saying whether auto-merge is on, the latest decision on each PR counted
   by verdict, decisions per day over two weeks, recent decisions, setup health, repositories and
   the queue.
-- **Sign in**: when dashboard login is on.
-- **Repository**: its policy, drawn as score bands, and its PRs.
-- **Pull request**: the decision with its reasons and confidence factors, the analysis by
-  dimension, findings grouped by severity (repeats folded), earlier decisions and the audit trail.
-- **Audit log**: the hash-chain check, filters, and the entries by day.
-- **Jobs**: the queue's counts and its latest jobs.
+- **Repositories** (`/repos`): a card per repository, with its PRs, average score and open
+  findings.
+  - **Repository** (`/repos/<owner>/<name>`): its policy, drawn as score bands, and its PRs.
+- **Software map** (`/map`, beta): the files with the most open findings, each with a bar split by
+  severity.
+- **Review standards** (`/standards`, beta): the default policy and each repository's own table.
+- **PR Triage** (`/triage`, preview): a board of PRs by their latest decision: needs review,
+  blocked, ready to merge, merged or closed.
+- **Findings** (`/findings`): every finding across PRs, over 7, 30 or 90 days or a year.
+  - Three figures: high-severity findings, the share of them resolved, and the average per PR.
+  - Filters for severity, state, category, type and repository, which are a GET form, plus a
+    search box.
+  - States come from the PR's analyses (`view.track_findings`). A finding is pending while it is
+    in the latest analysis of an open PR. It is resolved once a later commit removed it, and
+    ignored when the PR merged or closed with it still there.
+  - A finding is known by its rule, file, source and occurrence, since lines move between
+    commits.
+- **Workflows**: shown as coming soon, with no page behind it.
+- **Pull request** (`/prs/<id>`): the decision with its reasons and confidence factors, the
+  analysis by dimension, findings grouped by severity (repeats folded), earlier decisions and the
+  audit trail.
+- **Audit log** (`/audit`): the hash-chain check, filters, and the entries by day.
+- **Jobs** (`/jobs`): the queue's counts and its latest jobs.
+- **Configurations** (`/config`): the settings `review-app dashboard` started with, never a
+  secret.
+- **Integrations** (`/integrations`): GitHub App, NVIDIA NIM, Semgrep, pip-audit and Supabase
+  Auth, from the same health checks as Home.
+- **Search** (`/search`), and **Sign in** when dashboard login is on.
 
 ## Flow
 

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, glyph %}
+{% block title %}Integrations · review-app{% endblock %}
+{% block content %}
+<header class="page-head">
+  <p class="eyebrow">{{ icon('apps') }}Setup</p>
+  <h1>Integrations</h1>
+  <p class="lede">The services review-app works with, and whether each is ready. "Dashboard login" in the README, and <code>review-app check-config</code>, say how to set them up.</p>
+</header>
+
+<div class="integration-grid">
+  {% for name, glyph_name, about, check in cards %}
+  {% set state = 'none' if check is none else ('good' if check[0] else 'critical') %}
+  <section class="card integration tone-{{ state }}" aria-labelledby="int-{{ loop.index }}">
+    <header class="integration-head">
+      <span class="integration-icon">{{ icon(glyph_name) }}</span>
+      <h2 id="int-{{ loop.index }}">{{ name }}</h2>
+      {% if check is none %}<span class="tag">Not checked</span>
+      {% elif check[0] and check[1].startswith('off') %}<span class="tag">Off</span>
+      {% elif check[0] %}<span class="tag tone-good">Ready</span>
+      {% else %}<span class="tag tone-critical">Needs setup</span>{% endif %}
+    </header>
+    <p class="integration-about">{{ about }}</p>
+    {% if check is not none %}<p class="note">{{ check[1] }}</p>{% endif %}
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

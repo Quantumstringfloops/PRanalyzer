@@ -2,12 +2,14 @@
 {%- set path = request.url.path -%}
 {%- set user = request.state.user -%}
 {%- set signed_out = login_on and not user -%}
+{%- set theme = theme or 'system' -%}
+{%- set here = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') -%}
 <!doctype html>
-<html lang="en">
+<html lang="en"{% if theme != 'system' %} data-theme="{{ theme }}"{% endif %}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
+  <meta name="color-scheme" content="{{ 'light dark' if theme == 'system' else theme }}">
   <title>{% block title %}Overview · review-app{% endblock %}</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -25,14 +27,44 @@
         <span class="brand-text"><strong>review-app</strong><small>PR review &amp; merge</small></span>
       </a>
       {% if not signed_out %}
+      <form class="side-search" role="search" method="get" action="/search">
+        {{ icon('search') }}
+        <input type="search" name="q" value="{{ q if path == '/search' else '' }}" placeholder="Search" aria-label="Search pull requests, repositories and findings" autocomplete="off" spellcheck="false">
+      </form>
+      {% set sections = [
+        (none, [('/', 'Home', 'home', '', path == '/')]),
+        ('Codebase', [('/repos', 'Repositories', 'repo', '', path == '/repos' or path.startswith('/repos/')),
+                      ('/map', 'Software map', 'map', 'Beta', path == '/map')]),
+        ('Governance', [('/standards', 'Review standards', 'book', 'Beta', path == '/standards')]),
+        ('Review', [('/triage', 'PR Triage', 'pull-request', 'Preview', path == '/triage' or path.startswith('/prs/')),
+                    ('/findings', 'Findings', 'bug', '', path == '/findings'),
+                    (none, 'Workflows', 'route', 'Soon', false)]),
+        ('Activity', [('/audit', 'Audit log', 'list', '', path.startswith('/audit')),
+                      ('/jobs', 'Jobs', 'layers', '', path.startswith('/jobs'))]),
+        ('Setup', [('/config', 'Configurations', 'settings', '', path == '/config'),
+                   ('/integrations', 'Integrations', 'apps', '', path == '/integrations')]),
+      ] %}
       <nav class="nav" aria-label="Main">
-        <span class="nav-label">Workspace</span>
-        <a href="/"{% if path == '/' or path.startswith('/repos/') or path.startswith('/prs/') %} aria-current="page"{% endif %}>{{ icon('grid') }}<span>Overview</span></a>
-        <a href="/audit"{% if path.startswith('/audit') %} aria-current="page"{% endif %}>{{ icon('list') }}<span>Audit log</span></a>
-        <a href="/jobs"{% if path.startswith('/jobs') %} aria-current="page"{% endif %}>{{ icon('layers') }}<span>Jobs</span></a>
+        {% for label, items in sections %}
+        {% if label %}<span class="nav-label">{{ label }}</span>{% endif %}
+        {% for href, text, glyph, badge, current in items %}
+        {% if href %}
+        <a href="{{ href }}"{% if current %} aria-current="page"{% endif %}>{{ icon(glyph) }}<span>{{ text }}</span>{% if badge %}<span class="nav-badge">{{ badge }}</span>{% endif %}</a>
+        {% else %}
+        <span class="nav-disabled" aria-disabled="true" title="{{ text }}: coming soon">{{ icon(glyph) }}<span>{{ text }}</span><span class="nav-badge">{{ badge }}</span></span>
+        {% endif %}
+        {% endfor %}
+        {% endfor %}
       </nav>
+      {% endif %}
       <div class="sidebar-foot">
-        {% if auto_repos %}
+        <div class="theme-switch" role="group" aria-label="Theme">
+          {% for value, label, glyph in [('light', 'Light', 'sun'), ('dark', 'Dark', 'moon'), ('system', 'System', 'device')] %}
+          <a href="/theme/{{ value }}?next={{ here | urlencode }}" title="{{ label }} theme"{% if theme == value %} class="on" aria-current="true"{% endif %}>{{ icon(glyph) }}<span class="sr-only">{{ label }} theme</span></a>
+          {% endfor %}
+        </div>
+        {% if signed_out %}
+        {% elif auto_repos %}
         <div class="mode-card mode-auto" title="Auto-merge on for {{ auto_repos | join(', ') }}">
           <strong><span class="pulse"></span>Auto-merge</strong>
           <span>on for {{ auto_repos | length }} repo{{ 's' if auto_repos | length != 1 }}</span>
@@ -50,7 +82,6 @@
         </form>
         {% endif %}
       </div>
-      {% endif %}
     </aside>
     <main id="main" class="main">
       <div class="page">

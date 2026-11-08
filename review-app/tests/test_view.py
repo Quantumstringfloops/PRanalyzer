@@ -10,19 +10,25 @@ from review_app.policy import Policy
 from review_app.view import (
     action_label,
     action_tone,
+    active_filters,
     ago,
     area_chart,
     clock,
     confidence_tone,
     daily_counts,
     day_label,
+    filter_findings,
+    findings_summary,
     grade_tone,
     group_findings,
+    hotspots,
     monotone_path,
     percent,
+    query_string,
     ring,
     score_tone,
     shares,
+    track_findings,
     when,
 )
 
@@ -160,6 +166,66 @@ def test_findings_are_grouped_worst_first_and_repeats_folded():
     assert len(low) == 1 and low[0]["count"] == 3
     assert low[0]["files"] == {"a.py": [3, 9], "b.py": [4]}
     assert groups[1]["findings"][0]["files"] == {"a.py": []}   # no line, just the file
+
+
+def run(pr_id, findings, state="open", number=7, at="2026-11-08T10:00:00.000000Z"):
+    return {"pr_id": pr_id, "repo": "octo/app", "number": number, "pr_title": "A PR",
+            "author": "mona", "pr_state": state, "created_at": at, "findings": findings}
+
+
+def test_findings_are_tracked_across_a_prs_commits():
+    password = finding("CRITICAL", title="Hardcoded password", line=4)
+    tracked = track_findings([
+        run(1, [password, finding("LOW", line=3), finding("LOW", line=9)]),
+        # the next commit: the password is gone, one magic number moved, one went away
+        run(1, [finding("LOW", line=5)], at="2026-11-08T11:00:00.000000Z"),
+        run(2, [finding("HIGH", title="Token logged")], state="merged", number=8),
+    ])
+    states = sorted((f["title"], f["line"], f["state"]) for f in tracked)
+    assert states == [("Hardcoded password", 4, "resolved"), ("Magic number", 5, "pending"),
+                      ("Magic number", 9, "resolved"), ("Token logged", 3, "ignored")]
+    first = next(f for f in tracked if f["line"] == 5)
+    assert first["first_seen"] == "2026-11-08T10:00:00.000000Z"        # the same finding, moved
+    assert [f["severity"] for f in tracked][:2] == ["CRITICAL", "HIGH"]  # worst first
+
+
+def test_the_findings_summary():
+    tracked = track_findings([run(1, [finding("CRITICAL", title="A")]),
+                              run(1, [], at="2026-11-08T11:00:00.000000Z"),
+                              run(2, [finding("HIGH", title="B"), finding("LOW")], number=8)])
+    assert findings_summary(tracked, pr_count=2) == {"high": 2, "resolved_pct": 50, "per_pr": 1}
+    assert findings_summary([], pr_count=0) == {"high": 0, "resolved_pct": 0, "per_pr": 0}
+
+
+def test_filtering_findings():
+    tracked = track_findings([run(1, [finding("HIGH", title="SQL injection", filename="db.py"),
+                                      {**finding("LOW"), "source": "llm"}])])
+    assert [f["title"] for f in filter_findings(tracked, severity="high")] == ["SQL injection"]
+    assert [f["title"] for f in filter_findings(tracked, source="LLM")] == ["Magic number"]
+    assert [f["title"] for f in filter_findings(tracked, q="db.py")] == ["SQL injection"]
+    assert filter_findings(tracked, repo="octo/other") == []
+
+
+def test_hotspots_rank_files_by_open_findings():
+    tracked = track_findings([
+        run(1, [finding("HIGH", filename="src/db.py"), finding("LOW", filename="src/db.py", line=8),
+                finding("LOW", filename="README.md")]),
+        run(2, [finding("CRITICAL", title="Gone", filename="src/db.py")], number=8),
+        run(2, [], number=8, at="2026-11-08T11:00:00.000000Z"),     # ...resolved, so not counted
+    ])
+    spots = hotspots(tracked)
+    assert [(s["filename"], s["total"], s["width"]) for s in spots] == [
+        ("src/db.py", 2, 100), ("README.md", 1, 50)]
+    assert spots[0]["folder"] == "src" and spots[0]["name"] == "db.py"
+    assert [(severity, n) for severity, n, _ in spots[0]["parts"]] == [("HIGH", 1), ("LOW", 1)]
+
+
+def test_filter_links_keep_the_other_filters():
+    params = {"days": 30, "severity": "high", "state": "", "type": "llm", "q": "token"}
+    assert query_string(params, days=7) == "days=7&severity=high&type=llm&q=token"
+    chips = active_filters(params)
+    assert [label for label, _ in chips] == ["Severity: high", "Type: AI review", "Search: token"]
+    assert chips[0][1] == "days=30&type=llm&q=token"
 
 
 def test_different_findings_stay_apart():

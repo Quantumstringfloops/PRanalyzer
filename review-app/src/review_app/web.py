@@ -77,6 +77,9 @@ REFRESH_COOKIE = "review_app_refresh"
 REFRESH_MAX_AGE = 7 * 24 * 3600     # sign in again after a week
 LOGIN_POSTS = frozenset({"/auth/login", "/auth/logout", "/auth/refresh"})
 MAX_FORM_BYTES = 16 * 1024
+# the theme switch: a choice kept in a cookie (no script, so the page reloads in it)
+THEME_COOKIE = "review_app_theme"
+THEMES = ("light", "dark", "system")
 # One fixed statement for every filter combination: an empty filter switches its own condition
 # off, so no SQL is ever put together from what a request sends.
 AUDIT_PAGE = (
@@ -116,6 +119,60 @@ JOBS_PAGE = (
     "SELECT j.*, p.id AS pr_id FROM jobs j"
     " LEFT JOIN pull_requests p ON p.repo = j.repo AND p.number = j.pr_number"
     " ORDER BY j.id DESC LIMIT ?"
+)
+# every analysis of the pull requests analysed since a moment, oldest first: the findings and
+# their states are worked out from these (view.track_findings)
+FINDINGS_ANALYSES = (
+    "SELECT a.pr_id, a.created_at, a.findings, p.repo, p.number, p.title AS pr_title, p.author,"
+    " p.state AS pr_state FROM analyses a JOIN pull_requests p ON p.id = a.pr_id"
+    " WHERE a.error IS NULL"
+    " AND a.pr_id IN (SELECT pr_id FROM analyses WHERE created_at >= ?) ORDER BY a.id"
+)
+FINDINGS_WINDOWS = (7, 30, 90, 365)
+FINDINGS_PAGE = 300
+# each pull request with its latest decision: the triage board
+TRIAGE = (
+    "SELECT p.id AS pr_id, p.repo, p.number, p.title, p.author, p.state, p.is_fork,"
+    " p.is_draft, p.updated_at, d.verdict, d.confidence, d.outcome, d.complete, d.created_at,"
+    " a.score, a.grade FROM pull_requests p"
+    " JOIN decisions d ON d.id = (SELECT MAX(id) FROM decisions WHERE pr_id = p.id)"
+    " LEFT JOIN analyses a ON a.id = d.analysis_id ORDER BY d.id DESC LIMIT 300"
+)
+TRIAGE_LANES = (
+    ("needs_review", "Needs review", "warning", "alert", "A person should look first"),
+    ("block", "Blocked", "critical", "x", "Won't be merged as it is"),
+    ("merge", "Ready to merge", "good", "check", "Cleared every gate"),
+    ("done", "Merged or closed", "neutral", "merge", "No longer open"),
+)
+REPOSITORY_STATS = (
+    "SELECT r.*,"
+    " (SELECT COUNT(*) FROM pull_requests p WHERE p.repo = r.full_name) AS prs,"
+    " (SELECT COUNT(*) FROM pull_requests p WHERE p.repo = r.full_name AND p.state = 'open')"
+    "   AS open_prs,"
+    " (SELECT AVG(a.score) FROM analyses a JOIN pull_requests p ON p.id = a.pr_id"
+    "   WHERE p.repo = r.full_name AND a.score IS NOT NULL) AS avg_score,"
+    " (SELECT MAX(a.created_at) FROM analyses a JOIN pull_requests p ON p.id = a.pr_id"
+    "   WHERE p.repo = r.full_name) AS last_analysis"
+    " FROM repositories r ORDER BY r.full_name"
+)
+SEARCH_REPOSITORIES = (
+    "SELECT full_name FROM repositories WHERE full_name LIKE :pattern ESCAPE '\\'"
+    " ORDER BY full_name LIMIT 20"
+)
+SEARCH_PULLS = (
+    "SELECT p.id AS pr_id, p.repo, p.number, p.title, p.author, p.state FROM pull_requests p"
+    " WHERE p.title LIKE :pattern ESCAPE '\\' OR p.repo LIKE :pattern ESCAPE '\\'"
+    " OR p.author LIKE :pattern ESCAPE '\\' OR CAST(p.number AS TEXT) = :number"
+    " ORDER BY p.updated_at DESC LIMIT 30"
+)
+# the integrations page: each one, the health check that reports on it, and what it does
+INTEGRATIONS = (
+    ("GitHub App", "GitHub App", "branch",
+     "Receives webhooks, reads PRs, posts check runs and merges, with installation tokens"),
+    ("NVIDIA NIM", "AI review", "sparkle", "The AI review, on NVIDIA's hosted models"),
+    ("Semgrep", "semgrep", "shield-check", "Security rules over the changed files"),
+    ("pip-audit", "pip-audit", "layers", "Known vulnerabilities in changed Python dependencies"),
+    ("Supabase Auth", "Dashboard login", "lock", "Sign-in for the dashboard's admins"),
 )
 
 
@@ -210,9 +267,11 @@ def loads(text: str | None, default: Any) -> Any:
 
 def create_dashboard_app(store: Store, policies: PolicyBook,
                          health: list[tuple[str, bool, str]] | None = None,
-                         login: Login | None = None) -> FastAPI:
+                         login: Login | None = None,
+                         config: list[tuple[str, str, str]] | None = None) -> FastAPI:
     """The dashboard. Without `login` it answers on localhost only, to anyone who can reach it
-    there; with it, every page needs a signed-in admin."""
+    there; with it, every page needs a signed-in admin. `health` and `config` are what the
+    command that starts it found (cli.py): checks, and settings (name, value, note)."""
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(HERE / "templates"), autoescape=True)
     env.filters.update(
         verdict=lambda v: view.VERDICT_LABELS.get(v or "", v or "Not decided"),
@@ -227,6 +286,8 @@ def create_dashboard_app(store: Store, policies: PolicyBook,
         verdict_tones=view.VERDICT_TONES, outcome_tones=view.OUTCOME_TONES,
         outcome_notes=view.OUTCOME_NOTES, severity_tones=view.SEVERITY_TONES,
         job_tones=view.JOB_TONES, login_on=login is not None, ring=view.ring,
+        finding_states=view.FINDING_STATES, finding_types=view.FINDING_TYPES,
+        category_icons=view.CATEGORY_ICONS, qs=view.query_string,
     )
     templates = Jinja2Templates(env=env)
     queue = JobQueue(store)
@@ -262,7 +323,24 @@ def create_dashboard_app(store: Store, policies: PolicyBook,
         return secured(response)
 
     def page(request: Request, name: str, status_code: int = 200, **context: Any) -> HTMLResponse:
-        return templates.TemplateResponse(request, name, context, status_code=status_code)
+        return templates.TemplateResponse(request, name, {"theme": theme_of(request), **context},
+                                          status_code=status_code)
+
+    @app.get("/theme/{choice}")
+    def set_theme(request: Request, choice: str,
+                  next_page: str = Query("/", alias="next")) -> Response:
+        """Light, dark, or the system's: kept for a year, then back to the page it came from."""
+        if choice not in THEMES:
+            raise HTTPException(404, NOTHING_HERE)
+        response = RedirectResponse(back_to(next_page), status_code=303)
+        secure = not on_loopback(request)
+        if choice == "system":
+            response.delete_cookie(THEME_COOKIE, path="/", secure=secure, httponly=True,
+                                   samesite="lax")
+        else:
+            response.set_cookie(THEME_COOKIE, choice, max_age=365 * 24 * 3600, path="/",
+                                secure=secure, httponly=True, samesite="lax")
+        return response
 
     @app.get("/login", response_class=HTMLResponse)
     def login_page(request: Request, next_page: str = Query("/", alias="next")) -> Response:
@@ -379,6 +457,93 @@ def create_dashboard_app(store: Store, policies: PolicyBook,
     def healthz() -> dict[str, Any]:
         # open to anyone for a load balancer's checks, so with login on it says nothing more
         return {"ok": True} if login is not None else {"ok": True, "jobs": queue.counts()}
+
+    # ── findings across pull requests, and the pages around them ─────────────────────────
+    def tracked_findings(conn: sqlite3.Connection, days: int) -> tuple[list[dict[str, Any]], int]:
+        """The findings of the PRs analysed in the last `days` days, and how many PRs those are."""
+        since = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        runs = [{**dict(row), "findings": loads(row["findings"], [])}
+                for row in conn.execute(FINDINGS_ANALYSES, (since,))]
+        return view.track_findings(runs), len({run["pr_id"] for run in runs})
+
+    @app.get("/findings", response_class=HTMLResponse)
+    def findings(request: Request, days: int = 30, severity: str = "", state: str = "",
+                 category: str = "", kind: str = Query("", alias="type"), repo: str = "",
+                 q: str = "") -> HTMLResponse:
+        days = days if days in FINDINGS_WINDOWS else 30
+        with store.read() as conn:
+            everything, pr_count = tracked_findings(conn, days)
+        shown = view.filter_findings(everything, severity=severity, state=state,
+                                     category=category, source=kind, repo=repo, q=q)
+        params = {"days": days, "severity": severity, "state": state, "category": category,
+                  "type": kind, "repo": repo, "q": q}
+        return page(request, "findings.html", findings=shown[:FINDINGS_PAGE], total=len(shown),
+                    summary=view.findings_summary(everything, pr_count), days=days,
+                    windows=FINDINGS_WINDOWS, params=params,
+                    chips=view.active_filters(params),
+                    categories=sorted({f["category"] for f in everything}),
+                    repos=sorted({str(f["repo"]) for f in everything}))
+
+    @app.get("/triage", response_class=HTMLResponse)
+    def triage(request: Request) -> HTMLResponse:
+        board: dict[str, list[sqlite3.Row]] = {lane[0]: [] for lane in TRIAGE_LANES}
+        with store.read() as conn:
+            for row in conn.execute(TRIAGE):
+                board["done" if row["state"] != "open" else row["verdict"]].append(row)
+        return page(request, "triage.html", board=board, lanes=TRIAGE_LANES)
+
+    @app.get("/repos", response_class=HTMLResponse)
+    def repositories(request: Request) -> HTMLResponse:
+        with store.read() as conn:
+            rows = conn.execute(REPOSITORY_STATS).fetchall()
+            everything, _ = tracked_findings(conn, 365)
+        open_findings: dict[str, int] = {}
+        for f in everything:
+            if f["state"] != "resolved":
+                key = str(f["repo"]).lower()
+                open_findings[key] = open_findings.get(key, 0) + 1
+        return page(request, "repos.html", repos=rows, open_findings=open_findings)
+
+    @app.get("/standards", response_class=HTMLResponse)
+    def standards(request: Request) -> HTMLResponse:
+        return page(request, "standards.html", defaults=policies.defaults,
+                    overrides=sorted(policies.repos.items()), source=policies.source)
+
+    @app.get("/map", response_class=HTMLResponse)
+    def software_map(request: Request, days: int = 90) -> HTMLResponse:
+        days = days if days in FINDINGS_WINDOWS else 90
+        with store.read() as conn:
+            everything, _ = tracked_findings(conn, days)
+        return page(request, "map.html", spots=view.hotspots(everything), days=days,
+                    windows=FINDINGS_WINDOWS)
+
+    @app.get("/config", response_class=HTMLResponse)
+    def configuration(request: Request) -> HTMLResponse:
+        return page(request, "config.html", config=config or [], source=policies.source)
+
+    @app.get("/integrations", response_class=HTMLResponse)
+    def integrations(request: Request) -> HTMLResponse:
+        checks = {name: (ok, note) for name, ok, note in health or []}
+        cards = [(name, glyph, about, checks.get(check)) for name, check, glyph, about
+                 in INTEGRATIONS]
+        return page(request, "integrations.html", cards=cards)
+
+    @app.get("/search", response_class=HTMLResponse)
+    def search(request: Request, q: str = "") -> HTMLResponse:
+        needle = q.strip()[:200]
+        repos_found: list[sqlite3.Row] = []
+        pulls_found: list[sqlite3.Row] = []
+        findings_found: list[Any] = []
+        if needle:
+            terms = {"pattern": "%" + like_prefix(needle)[:-1] + "%",
+                     "number": needle.lstrip("#")}
+            with store.read() as conn:
+                repos_found = conn.execute(SEARCH_REPOSITORIES, terms).fetchall()
+                pulls_found = conn.execute(SEARCH_PULLS, terms).fetchall()
+                everything, _ = tracked_findings(conn, 365)
+            findings_found = view.filter_findings(everything, q=needle)[:30]
+        return page(request, "search.html", q=needle, repos=repos_found, pulls=pulls_found,
+                    findings=findings_found)
 
     return app
 
@@ -506,8 +671,23 @@ def identify(login: Login, request: Request) -> tuple[User | None, Session | Non
 
 def checks_login(path: str) -> bool:
     """Every page needs a signed-in admin but the login page itself, the stylesheet and icon,
-    the health check and the sign-in endpoints."""
-    return not (path.startswith("/static/") or path == "/healthz" or path in LOGIN_POSTS)
+    the health check, the sign-in endpoints and the theme switch."""
+    return not (path.startswith(("/static/", "/theme/")) or path == "/healthz"
+                or path in LOGIN_POSTS)
+
+
+def theme_of(request: Request) -> str:
+    choice = request.cookies.get(THEME_COOKIE, "")
+    return choice if choice in ("light", "dark") else "system"
+
+
+def back_to(target: str | None) -> str:
+    """Where the theme switch returns to: any page here, the sign-in page included."""
+    target = target or "/"
+    if (target == "/login" or target.startswith("/login?")) and not any(
+            ch in target for ch in "\r\n\\"):
+        return target
+    return safe_next(target)
 
 
 def login_required(request: Request) -> Response:

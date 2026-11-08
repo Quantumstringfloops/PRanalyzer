@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, glyph, score_meter, time_ago %}
+{% block title %}PR Triage · review-app{% endblock %}
+{% block content %}
+<header class="page-head">
+  <p class="eyebrow">{{ icon('pull-request') }}Review · preview</p>
+  <h1>PR Triage</h1>
+  <p class="lede">Every pull request by what it needs next, from its latest decision.</p>
+</header>
+
+<div class="board">
+  {% for key, label, tone, glyph_name, hint in lanes %}
+  <section class="lane tone-{{ tone }}" aria-labelledby="lane-{{ key }}">
+    <header class="lane-head">
+      <h2 id="lane-{{ key }}">{{ glyph(glyph_name) }}{{ label }}</h2>
+      <span class="count">{{ board[key] | length }}</span>
+    </header>
+    <p class="lane-hint">{{ hint }}</p>
+    <ol class="lane-cards">
+      {% for r in board[key] %}
+      <li>
+        <a class="pr-card" href="/prs/{{ r.pr_id }}">
+          <span class="pr-card-title">{{ r.title or 'Untitled pull request' }}</span>
+          <span class="pr-card-meta"><span class="mono">{{ r.repo.split('/')[-1] }}#{{ r.number }}</span>{% if r.author %}<span>{{ icon('user') }}{{ r.author }}</span>{% endif %}</span>
+          <span class="pr-card-foot">{% if r.score is not none %}{{ score_meter(r.score, r.grade, policies.for_repo(r.repo)) }}{% endif %}{{ time_ago(r.created_at) }}</span>
+        </a>
+      </li>
+      {% else %}
+      <li class="lane-empty">Nothing here.</li>
+      {% endfor %}
+    </ol>
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

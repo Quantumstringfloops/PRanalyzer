@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, mode_tag, policy_details %}
+{% block title %}Review standards · review-app{% endblock %}
+{% block content %}
+<header class="page-head">
+  <p class="eyebrow">{{ icon('book') }}Governance · beta</p>
+  <h1>Review standards</h1>
+  <p class="lede">The thresholds every pull request is judged by, from {{ source }}. Change them in <code>review-app.toml</code> and restart.</p>
+</header>
+
+<div class="standards">
+  <section class="card" aria-labelledby="defaults-title">
+    <header class="card-head">
+      <h2 id="defaults-title">{{ icon('book') }}Defaults</h2>
+      {{ mode_tag(defaults) }}
+    </header>
+    <p class="policy-mode">Every repository without a table of its own in <code>review-app.toml</code>.</p>
+    {{ policy_details(defaults) }}
+  </section>
+  {% for name, policy in overrides %}
+  <section class="card" aria-labelledby="std-{{ loop.index }}">
+    <header class="card-head">
+      <h2 id="std-{{ loop.index }}">{{ icon('repo') }}<a href="/repos/{{ name }}">{{ name }}</a></h2>
+      {{ mode_tag(policy) }}
+    </header>
+    <p class="policy-mode"><code>[repos."{{ name }}"]</code>: what's set there, with the defaults for the rest.</p>
+    {{ policy_details(policy) }}
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}
