@@ -317,9 +317,9 @@ No checkout step is needed: the action reads the PR through the GitHub API and i
 |-------|---------|-------------|
 | `github-token` | `github.token` | Reads the PR and posts the review |
 | `pr-url` | the PR that triggered the run | The pull request to analyse |
-| `llm-provider` | empty | `openai`, `anthropic` or `ollama`. Empty skips the LLM review; a provider without its key is skipped with a note in the review |
+| `llm-provider` | empty | `openai`, `anthropic`, `nvidia` or `ollama`. Empty skips the LLM review; a provider without its key is skipped with a note in the review |
 | `llm-model` | the provider's default | Model to use |
-| `openai-api-key`, `anthropic-api-key` | empty | Pass a secret here |
+| `openai-api-key`, `anthropic-api-key`, `nvidia-api-key` | empty | Pass a secret here |
 | `post-review` | `true` | Post the result as a review |
 | `fail-on-block` | `true` | Fail the step when the PR is blocked |
 | `config` | empty | A settings file in the workspace, used instead of the base branch's `.pr-analyzer.toml` (see below) |
