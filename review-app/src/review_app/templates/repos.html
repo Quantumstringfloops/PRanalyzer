@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, mode_tag, install_status, empty_state %}
+{% block title %}Repositories · review-app{% endblock %}
+{% block content %}
+<header class="page-head">
+  <p class="eyebrow">{{ icon('repo') }}Codebase</p>
+  <h1>Repositories</h1>
+  <p class="lede">Every repository review-app has seen: through the GitHub App, or <code>review-app analyze</code>.</p>
+</header>
+
+{% if repos %}
+<div class="repo-grid">
+  {% for r in repos %}
+  <a class="card repo-card" href="/repos/{{ r.full_name }}">
+    <span class="repo-card-head">{{ icon('repo') }}<strong>{{ r.full_name }}</strong>{{ mode_tag(policies.for_repo(r.full_name)) }}</span>
+    <dl class="repo-stats">
+      <div><dt>Pull requests</dt><dd>{{ r.prs }}</dd></div>
+      <div><dt>Open</dt><dd>{{ r.open_prs }}</dd></div>
+      <div><dt>Avg score</dt><dd>{{ '%.1f' | format(r.avg_score) if r.avg_score is not none else '—' }}</dd></div>
+      <div><dt>Open findings</dt><dd>{{ open_findings.get(r.full_name | lower, 0) }}</dd></div>
+    </dl>
+    <span class="note">{{ install_status(r) }}{% if r.last_analysis %} · last analysed {{ r.last_analysis | ago }}{% endif %}</span>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<section class="card">
+  {% call empty_state('No repositories yet', 'repo') %}Install the GitHub App on one, or run <code>review-app analyze &lt;PR URL&gt;</code>.{% endcall %}
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, empty_state, windows_switch %}
+{% block title %}Software map · review-app{% endblock %}
+{% block content %}
+<header class="page-head split-head">
+  <div class="page-head">
+    <p class="eyebrow">{{ icon('map') }}Codebase · beta</p>
+    <h1>Software map</h1>
+    <p class="lede">Where findings cluster: the files with the most open findings (pending, or merged anyway), worst first.</p>
+  </div>
+  <div class="window">{{ windows_switch(windows, days, {'days': days}) }}</div>
+</header>
+
+<section class="card" aria-label="Files with the most open findings">
+  {% if spots %}
+  <ul class="legend map-legend">
+    {% for sev in ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW') %}<li class="tone-{{ severity_tones.get(sev, 'neutral') }}"><span class="dot"></span>{{ sev | capitalize }}</li>{% endfor %}
+  </ul>
+  <ol class="hotspots">
+    {% for h in spots %}
+    <li class="hotspot">
+      <span class="hot-file" title="{{ h.repo }}">{% if h.folder %}<span class="mono muted">{{ h.folder }}/</span>{% endif %}<strong class="mono">{{ h.name }}</strong><span class="note">{{ h.repo.split('/')[-1] }}</span></span>
+      <span class="hot-track"><span class="hot-bar w{{ h.width }}">{% for sev, n, share in h.parts %}<span class="seg tone-{{ severity_tones.get(sev, 'neutral') }} w{{ share }}" title="{{ n }} {{ sev | lower }}"></span>{% endfor %}</span></span>
+      <strong class="hot-total num">{{ h.total }}</strong>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  {% call empty_state('Nothing to map yet', 'map') %}No open findings in the last {{ days }} days.{% endcall %}
+  {% endif %}
+</section>
+{% endblock %}

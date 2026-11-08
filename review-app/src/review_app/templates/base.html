@@ -27,11 +27,34 @@
         <span class="brand-text"><strong>review-app</strong><small>PR review &amp; merge</small></span>
       </a>
       {% if not signed_out %}
+      <form class="side-search" role="search" method="get" action="/search">
+        {{ icon('search') }}
+        <input type="search" name="q" value="{{ q if path == '/search' else '' }}" placeholder="Search" aria-label="Search pull requests, repositories and findings" autocomplete="off" spellcheck="false">
+      </form>
+      {% set sections = [
+        (none, [('/', 'Home', 'home', '', path == '/')]),
+        ('Codebase', [('/repos', 'Repositories', 'repo', '', path == '/repos' or path.startswith('/repos/')),
+                      ('/map', 'Software map', 'map', 'Beta', path == '/map')]),
+        ('Governance', [('/standards', 'Review standards', 'book', 'Beta', path == '/standards')]),
+        ('Review', [('/triage', 'PR Triage', 'pull-request', 'Preview', path == '/triage' or path.startswith('/prs/')),
+                    ('/findings', 'Findings', 'bug', '', path == '/findings'),
+                    (none, 'Workflows', 'route', 'Soon', false)]),
+        ('Activity', [('/audit', 'Audit log', 'list', '', path.startswith('/audit')),
+                      ('/jobs', 'Jobs', 'layers', '', path.startswith('/jobs'))]),
+        ('Setup', [('/config', 'Configurations', 'settings', '', path == '/config'),
+                   ('/integrations', 'Integrations', 'apps', '', path == '/integrations')]),
+      ] %}
       <nav class="nav" aria-label="Main">
-        <span class="nav-label">Workspace</span>
-        <a href="/"{% if path == '/' or path.startswith('/repos/') or path.startswith('/prs/') %} aria-current="page"{% endif %}>{{ icon('grid') }}<span>Overview</span></a>
-        <a href="/audit"{% if path.startswith('/audit') %} aria-current="page"{% endif %}>{{ icon('list') }}<span>Audit log</span></a>
-        <a href="/jobs"{% if path.startswith('/jobs') %} aria-current="page"{% endif %}>{{ icon('layers') }}<span>Jobs</span></a>
+        {% for label, items in sections %}
+        {% if label %}<span class="nav-label">{{ label }}</span>{% endif %}
+        {% for href, text, glyph, badge, current in items %}
+        {% if href %}
+        <a href="{{ href }}"{% if current %} aria-current="page"{% endif %}>{{ icon(glyph) }}<span>{{ text }}</span>{% if badge %}<span class="nav-badge">{{ badge }}</span>{% endif %}</a>
+        {% else %}
+        <span class="nav-disabled" aria-disabled="true" title="{{ text }}: coming soon">{{ icon(glyph) }}<span>{{ text }}</span><span class="nav-badge">{{ badge }}</span></span>
+        {% endif %}
+        {% endfor %}
+        {% endfor %}
       </nav>
       {% endif %}
       <div class="sidebar-foot">

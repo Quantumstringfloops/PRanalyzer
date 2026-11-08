@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, empty_state, severity_bars, state_badge %}
+{% block title %}Search · review-app{% endblock %}
+{% block content %}
+<header class="page-head">
+  <p class="eyebrow">{{ icon('search') }}Search</p>
+  <h1>{% if q %}Results for “{{ q }}”{% else %}Search{% endif %}</h1>
+  <p class="lede">Repositories, pull requests (by title, number or author) and findings (by title or file).</p>
+</header>
+
+<form class="toolbar" method="get" action="/search" role="search">
+  <label class="search-field wide-search">{{ icon('search') }}<input type="search" name="q" value="{{ q }}" placeholder="Search…" aria-label="Search" autocomplete="off" spellcheck="false"></label>
+  <button class="button" type="submit">Search</button>
+</form>
+
+{% if q %}
+{% if not (repos or pulls or findings) %}
+<section class="card">{% call empty_state('Nothing found', 'search') %}No repository, pull request or finding matches “{{ q }}”.{% endcall %}</section>
+{% endif %}
+{% if repos %}
+<section class="card" aria-labelledby="found-repos">
+  <header class="card-head"><h2 id="found-repos">{{ icon('repo') }}Repositories</h2><span class="count">{{ repos | length }}</span></header>
+  <ul class="list">{% for r in repos %}<li><a class="strong-link" href="/repos/{{ r.full_name }}">{{ icon('repo') }}{{ r.full_name }}</a></li>{% endfor %}</ul>
+</section>
+{% endif %}
+{% if pulls %}
+<section class="card" aria-labelledby="found-prs">
+  <header class="card-head"><h2 id="found-prs">{{ icon('pull-request') }}Pull requests</h2><span class="count">{{ pulls | length }}</span></header>
+  <ul class="list">{% for p in pulls %}<li><a class="strong-link" href="/prs/{{ p.pr_id }}">{{ icon('pull-request') }}{{ p.title or 'Untitled pull request' }}</a><span class="note">{{ p.repo }}#{{ p.number }} · {{ p.state }}{% if p.author %} · {{ p.author }}{% endif %}</span></li>{% endfor %}</ul>
+</section>
+{% endif %}
+{% if findings %}
+<section class="card" aria-labelledby="found-findings">
+  <header class="card-head"><h2 id="found-findings">{{ icon('bug') }}Findings</h2><a class="aside" href="/findings?days=365&amp;q={{ q | urlencode }}">All on the Findings page {{ icon('arrow-right') }}</a></header>
+  <ul class="list">{% for f in findings %}<li><a class="strong-link" href="/prs/{{ f.pr_id }}">{{ icon('bug') }}{{ f.title }}</a><span class="note">{{ severity_bars(f.severity) }} · {{ state_badge(f.state) }} · {{ f.repo.split('/')[-1] }}#{{ f.number }}{% if f.filename %} · <span class="mono">{{ f.filename }}</span>{% endif %}</span></li>{% endfor %}</ul>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

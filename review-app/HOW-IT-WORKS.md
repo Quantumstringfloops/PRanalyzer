@@ -192,15 +192,36 @@ These are built in and can't be switched off:
 `review-app dashboard` serves a website at http://localhost:8001/. It only reads. **Nothing on
 it changes anything on GitHub.**
 
+The sidebar groups the pages the way review tools usually do. A search box at the top looks
+through repositories, pull requests and findings.
+
 | Page | What it shows |
 |---|---|
-| Overview | Whether auto-merge is on, the latest decision on each PR counted by verdict, decisions per day for two weeks, recent decisions, setup health (GitHub App, scanners, AI key, policy, login), repositories, and the job queue |
-| Repository | That repository's policy, drawn as score bands, and its PRs |
+| Home | Whether auto-merge is on, the latest decision on each PR counted by verdict, decisions per day for two weeks, recent decisions, setup health (GitHub App, scanners, AI key, policy, login), repositories, and the job queue |
+| Repositories | Every repository review-app has seen, with its PRs, average score and open findings. Each one opens its own page: the policy, drawn as score bands, and its PRs |
+| Software map (beta) | The files with the most open findings, each with a bar split by severity |
+| Review standards (beta) | The thresholds from `review-app.toml`: the defaults, and each repository's own table |
+| PR Triage (preview) | A board of PRs by what they need next: needs review, blocked, ready to merge, merged or closed |
+| Findings | Every finding across PRs, with a state. See below |
+| Workflows | Shown as coming soon; there's nothing behind it yet |
 | Pull request | The decision with its reasons and score, the three confidence factors, the score for each dimension, findings grouped by severity, earlier decisions, and the PR's audit trail |
 | Audit log | Every recorded step, by day, with filters by repository and action, and whether the hash chain is intact |
 | Jobs | The queue: how many jobs are queued, running, done or failed, and the latest ones |
+| Configurations | The settings the dashboard started with, read-only. Secrets are never shown |
+| Integrations | GitHub App, NVIDIA NIM, Semgrep, pip-audit and Supabase Auth, each marked ready, needs setup, or not checked |
 | Sign in | Only when login is on (next section) |
 
+**The Findings page.**
+- **Window:** it covers the PRs analysed in the last 7, 30 or 90 days, or a year, whether they're open, closed or merged.
+- **Figures:** it opens with three of them: how many high-severity findings there are (critical and high), the share of those that were resolved, and the average per PR.
+- **Filters and search:** Filters narrows the list by severity, state, category, type (static check, security scan or AI review) and repository. Search looks in the titles, files and PR titles. Each filter in use shows as a chip that removes it.
+
+Each finding has a state, worked out from the PR's analyses:
+- **Pending:** it's in the latest analysis, and the PR is still open.
+- **Resolved:** a later commit in the same PR made it go away.
+- **Ignored:** the PR was merged or closed with the finding still there.
+
+Other details:
 - **Theme switch.** The sidebar has a Light / Dark / System switch. Your choice is kept in a
   cookie for a year. System follows your computer's setting.
 - **Without login,** the dashboard only answers on your own machine (localhost).

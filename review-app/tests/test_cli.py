@@ -4,6 +4,7 @@ import pytest
 from conftest import FakeAccess, FakeAnalyzer, FakeGateway, make_pull
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi.testclient import TestClient
 from pr_analyzer.config import Settings as AnalyzerSettings
 from typer.testing import CliRunner
 
@@ -45,6 +46,20 @@ def test_the_dashboard_starts_on_loopback(served, host):
     result = runner.invoke(cli.app, ["dashboard", "--host", host, "--port", "9001"])
     assert result.exit_code == 0, result.output
     assert served[0][1] == {"host": host, "port": 9001, "log_level": "warning"}
+
+
+def test_the_dashboard_shows_its_settings_but_no_secret(served, monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://proj.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key-never-shown")
+    monkeypatch.setenv("REVIEW_APP_ADMIN_EMAILS", "admin@example.com")
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "webhook-secret-never-shown")
+    assert runner.invoke(cli.app, ["dashboard"]).exit_code == 0
+    client = TestClient(served[0][0], base_url="http://localhost:8001", follow_redirects=False)
+    # with login on, the page needs a session; read it the way the dashboard renders it instead
+    settings = cli.dashboard_settings(AppSettings())
+    assert ("Dashboard login", "Supabase Auth", "SUPABASE_URL and REVIEW_APP_ADMIN_EMAILS") in settings
+    assert "never-shown" not in repr(settings)
+    assert client.get("/config").status_code == 303
 
 
 def test_a_half_set_up_login_stops_the_dashboard(served, monkeypatch):

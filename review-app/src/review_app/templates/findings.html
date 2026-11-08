@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, empty_state, tilt_zones, severity_bars, state_badge, finding_type, windows_switch %}
+{% block title %}Findings · review-app{% endblock %}
+{% block content %}
+<header class="page-head split-head">
+  <div class="page-head">
+    <p class="eyebrow">{{ icon('bug') }}Review</p>
+    <h1>Findings</h1>
+    <p class="lede">Everything pr-analyzer found in the pull requests it graded, and what became of it.</p>
+  </div>
+  <div class="window">
+    {{ windows_switch(windows, days, params) }}
+    <span class="muted">Includes open, closed &amp; merged PRs</span>
+  </div>
+</header>
+
+<section class="kpis" aria-label="High-severity findings, last {{ days }} days">
+  <div class="kpi tilt">
+    {{ tilt_zones() }}
+    <div class="tilt-body">
+      <strong class="kpi-value">{{ summary.high }}</strong>
+      <span class="kpi-label">Total high-severity findings<span class="info" title="Critical and high findings in the pull requests analysed in the last {{ days }} days">{{ icon('info') }}</span></span>
+    </div>
+  </div>
+  <div class="kpi tilt">
+    {{ tilt_zones() }}
+    <div class="tilt-body">
+      <strong class="kpi-value">{{ summary.resolved_pct }}%</strong>
+      <span class="kpi-label">High-severity findings resolved<span class="info" title="The share of them that a later commit in the same pull request made go away">{{ icon('info') }}</span></span>
+    </div>
+  </div>
+  <div class="kpi tilt">
+    {{ tilt_zones() }}
+    <div class="tilt-body">
+      <strong class="kpi-value">{{ '%g' | format(summary.per_pr) }}</strong>
+      <span class="kpi-label">Avg high-severity findings per PR<span class="info" title="High-severity findings divided by the pull requests analysed in the window">{{ icon('info') }}</span></span>
+    </div>
+  </div>
+</section>
+
+<form class="toolbar" method="get" action="/findings" role="search">
+  <input type="hidden" name="days" value="{{ days }}">
+  <details class="filter-menu"{% if chips %} open{% endif %}>
+    <summary class="button ghost">{{ icon('filter') }}Filters{% if chips %}<span class="count">{{ chips | length }}</span>{% endif %}</summary>
+    <div class="filter-panel">
+      <label class="field">Severity
+        <select name="severity"><option value="">Any</option>{% for s in ('critical', 'high', 'medium', 'low') %}<option value="{{ s }}"{% if params.severity | lower == s %} selected{% endif %}>{{ s | capitalize }}</option>{% endfor %}</select>
+      </label>
+      <label class="field">State
+        <select name="state"><option value="">Any</option>{% for value, label in finding_states.items() %}<option value="{{ value }}"{% if params.state == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+      </label>
+      <label class="field">Category
+        <select name="category"><option value="">Any</option>{% for c in categories %}<option value="{{ c }}"{% if params.category == c %} selected{% endif %}>{{ c | capitalize }}</option>{% endfor %}</select>
+      </label>
+      <label class="field">Type
+        <select name="type"><option value="">Any</option>{% for value, label in finding_types.items() %}<option value="{{ value }}"{% if params.type == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+      </label>
+      <label class="field">Repository
+        <select name="repo"><option value="">Any</option>{% for r in repos %}<option value="{{ r }}"{% if params.repo | lower == r | lower %} selected{% endif %}>{{ r }}</option>{% endfor %}</select>
+      </label>
+      <div class="filter-buttons"><button class="button" type="submit">Apply</button><a class="button ghost" href="/findings?days={{ days }}">Clear</a></div>
+    </div>
+  </details>
+  <label class="search-field">{{ icon('search') }}<input type="search" name="q" value="{{ params.q }}" placeholder="Search findings…" aria-label="Search findings" autocomplete="off" spellcheck="false"></label>
+</form>
+{% if chips %}
+<div class="chips" aria-label="Filters in use">
+  {% for label, without in chips %}<a class="chip removable" href="/findings?{{ without }}" title="Remove this filter">{{ label }}{{ icon('x') }}</a>{% endfor %}
+</div>
+{% endif %}
+
+<section class="card flush" aria-labelledby="findings-title">
+  {% if findings %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr><th scope="col" id="findings-title">Findings ({{ total }})</th><th scope="col">PR</th><th scope="col">Repository</th><th scope="col">State</th><th scope="col">Severity</th><th scope="col">Category</th><th scope="col">Type</th><th scope="col">PR author</th></tr>
+      </thead>
+      <tbody>
+        {% for f in findings %}
+        <tr class="tone-{{ severity_tones.get(f.severity, 'neutral') }}">
+          <td class="finding-cell"><a class="cell-link" href="/prs/{{ f.pr_id }}">{{ f.title }}</a>{% if f.filename %}<span class="cell-sub mono">{{ f.filename }}{% if f.line %}:{{ f.line }}{% endif %}</span>{% endif %}</td>
+          <td><a class="pr-link" href="/prs/{{ f.pr_id }}">#{{ f.number }}</a></td>
+          <td class="nowrap" title="{{ f.repo }}">{{ f.repo.split('/')[-1] }}</td>
+          <td class="nowrap">{{ state_badge(f.state) }}</td>
+          <td class="nowrap">{{ severity_bars(f.severity) }}</td>
+          <td class="nowrap"><span class="with-icon">{{ icon(category_icons.get(f.category, 'list')) }}{{ f.category | capitalize }}</span></td>
+          <td class="nowrap">{{ finding_type(f.source) }}</td>
+          <td class="nowrap">{{ f.author or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if total > findings | length %}<p class="table-note">Showing the first {{ findings | length }} of {{ total }}: narrow them down with the filters.</p>{% endif %}
+  {% else %}
+  {% call empty_state('No findings' ~ (' match' if chips else ''), 'bug') %}{% if chips %}Nothing in the last {{ days }} days matches these filters.{% else %}Findings show up once pull requests are analysed: from GitHub's webhooks, or <code>review-app analyze &lt;PR URL&gt;</code>.{% endif %}{% endcall %}
+  {% endif %}
+</section>
+{% endblock %}
