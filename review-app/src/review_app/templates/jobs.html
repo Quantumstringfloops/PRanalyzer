@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import icon, time_ago, sha, empty_state %}
+{% from "_macros.html" import icon, time_ago, sha, empty_state, tilt_zones %}
 {% block title %}Jobs · review-app{% endblock %}
 {% block content %}
 <header class="page-head">
@@ -9,9 +9,12 @@
 
 <div class="tiles">
   {% for status, n in counts.items() %}
-  <div class="tile">
-    <span class="tile-label"><span class="dot tone-{{ job_tones.get(status, 'neutral') }}"></span>{{ status | capitalize }}</span>
-    <span class="tile-value">{{ n }}</span>
+  <div class="tile tilt tone-{{ job_tones.get(status, 'neutral') }}">
+    {{ tilt_zones() }}
+    <div class="tilt-body">
+      <span class="tile-label"><span class="dot"></span>{{ status | capitalize }}</span>
+      <span class="tile-value">{{ n }}</span>
+    </div>
   </div>
   {% endfor %}
 </div>

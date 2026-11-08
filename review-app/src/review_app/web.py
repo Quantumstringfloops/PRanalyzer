@@ -11,6 +11,7 @@ import sqlite3
 import threading
 from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager, suppress
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
@@ -53,7 +54,10 @@ log = structlog.get_logger(__name__)
 HERE = Path(__file__).parent
 LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "[::1]"})
 SECURITY_HEADERS = {
-    "Content-Security-Policy": "default-src 'none'; style-src 'self'; img-src 'self'; "
+    # no script at all, and no inline style; the one outside source is the Oxanium font (the
+    # shadcn preset's) from Google Fonts: its stylesheet and the font files
+    "Content-Security-Policy": "default-src 'none'; style-src 'self' https://fonts.googleapis.com; "
+                               "font-src https://fonts.gstatic.com; img-src 'self'; "
                                "form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -83,6 +87,12 @@ AUDIT_PAGE = (
     " AND (:before IS NULL OR a.id < :before)"
     " ORDER BY a.id DESC LIMIT :limit"
 )
+# decisions per day, for the overview's activity chart
+ACTIVITY = (
+    "SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS n FROM decisions"
+    " WHERE created_at >= ? GROUP BY day"
+)
+ACTIVITY_DAYS = 14
 # the latest decision on each pull request, counted by verdict
 LATEST_VERDICTS = (
     "SELECT verdict, COUNT(*) AS n FROM decisions"
@@ -216,7 +226,7 @@ def create_dashboard_app(store: Store, policies: PolicyBook,
         confidence_tone=view.confidence_tone, action_tone=view.action_tone,
         verdict_tones=view.VERDICT_TONES, outcome_tones=view.OUTCOME_TONES,
         outcome_notes=view.OUTCOME_NOTES, severity_tones=view.SEVERITY_TONES,
-        job_tones=view.JOB_TONES, login_on=login is not None,
+        job_tones=view.JOB_TONES, login_on=login is not None, ring=view.ring,
     )
     templates = Jinja2Templates(env=env)
     queue = JobQueue(store)
@@ -284,11 +294,16 @@ def create_dashboard_app(store: Store, policies: PolicyBook,
             verdicts = {row["verdict"]: row["n"] for row in conn.execute(LATEST_VERDICTS)}
             merged = conn.execute(
                 "SELECT COUNT(*) FROM decisions WHERE outcome = 'merged'").fetchone()[0]
+            first_day = datetime.now(UTC).date() - timedelta(days=ACTIVITY_DAYS - 1)
+            per_day = {row["day"]: row["n"]
+                       for row in conn.execute(ACTIVITY, (first_day.isoformat(),))}
         checks = health or []
+        activity = view.daily_counts(per_day, days=ACTIVITY_DAYS)
         return page(request, "index.html", repos=repos, decisions=decisions, health=checks,
                     ready=sum(1 for _, ok, _ in checks if ok), jobs=queue.counts(),
                     split=view.shares({v: verdicts.get(v, 0) for v in view.VERDICT_LABELS}),
-                    graded=sum(verdicts.values()), merged=merged)
+                    graded=sum(verdicts.values()), merged=merged, activity=activity,
+                    chart=view.area_chart([n for _, n in activity]))
 
     @app.get("/repos/{owner}/{name}", response_class=HTMLResponse)
     def repo(request: Request, owner: str, name: str) -> HTMLResponse:

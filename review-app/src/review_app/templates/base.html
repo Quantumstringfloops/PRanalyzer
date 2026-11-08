@@ -10,39 +10,54 @@
   <meta name="color-scheme" content="light dark">
   <title>{% block title %}Overview · review-app{% endblock %}</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oxanium:wght@300..800&amp;display=swap">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
-  <header class="topbar">
-    <div class="topbar-inner">
+  <div class="aurora" aria-hidden="true"><span></span><span></span><span></span></div>
+  <div class="shell{{ ' shell-bare' if signed_out }}">
+    <aside class="sidebar">
       <a class="brand" href="/">
         <span class="brand-mark">{{ icon('merge') }}</span>
-        <span>review-app</span>
+        <span class="brand-text"><strong>review-app</strong><small>PR review &amp; merge</small></span>
       </a>
       {% if not signed_out %}
       <nav class="nav" aria-label="Main">
+        <span class="nav-label">Workspace</span>
         <a href="/"{% if path == '/' or path.startswith('/repos/') or path.startswith('/prs/') %} aria-current="page"{% endif %}>{{ icon('grid') }}<span>Overview</span></a>
         <a href="/audit"{% if path.startswith('/audit') %} aria-current="page"{% endif %}>{{ icon('list') }}<span>Audit log</span></a>
         <a href="/jobs"{% if path.startswith('/jobs') %} aria-current="page"{% endif %}>{{ icon('layers') }}<span>Jobs</span></a>
       </nav>
-      {% if auto_repos %}
-      <span class="mode mode-auto" title="Auto-merge on for {{ auto_repos | join(', ') }}">{{ icon('merge') }}Auto-merge · {{ auto_repos | length }} repo{{ 's' if auto_repos | length != 1 }}</span>
-      {% else %}
-      <span class="mode" title="review-app merges nothing until auto-merge is switched on for a repository">{{ icon('shield') }}Recommend-only</span>
+      <div class="sidebar-foot">
+        {% if auto_repos %}
+        <div class="mode-card mode-auto" title="Auto-merge on for {{ auto_repos | join(', ') }}">
+          <strong><span class="pulse"></span>Auto-merge</strong>
+          <span>on for {{ auto_repos | length }} repo{{ 's' if auto_repos | length != 1 }}</span>
+        </div>
+        {% else %}
+        <div class="mode-card" title="review-app merges nothing until auto-merge is switched on for a repository">
+          <strong><span class="pulse"></span>Recommend-only</strong>
+          <span>grades PRs, merges nothing</span>
+        </div>
+        {% endif %}
+        {% if user %}
+        <form class="account" method="post" action="/auth/logout">
+          <span class="account-email" title="Signed in as {{ user.email }}"><span class="avatar">{{ user.email[:1] }}</span><span>{{ user.email }}</span></span>
+          <button class="button ghost small" type="submit" title="Sign out">{{ icon('logout') }}<span>Sign out</span></button>
+        </form>
+        {% endif %}
+      </div>
       {% endif %}
-      {% endif %}
-      {% if user %}
-      <form class="account" method="post" action="/auth/logout">
-        <span class="account-email" title="Signed in as {{ user.email }}">{{ icon('user') }}<span>{{ user.email }}</span></span>
-        <button class="button ghost small" type="submit">Sign out</button>
-      </form>
-      {% endif %}
-    </div>
-  </header>
-  <main id="main" class="container">
-    {% block content %}{% endblock %}
-  </main>
-  <footer class="footer container">Read-only local admin view · nothing here changes GitHub</footer>
+    </aside>
+    <main id="main" class="main">
+      <div class="page">
+        {% block content %}{% endblock %}
+      </div>
+      <footer class="footer">Read-only admin view · nothing here changes GitHub</footer>
+    </main>
+  </div>
 </body>
 </html>

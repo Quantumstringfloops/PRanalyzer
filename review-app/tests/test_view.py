@@ -11,12 +11,16 @@ from review_app.view import (
     action_label,
     action_tone,
     ago,
+    area_chart,
     clock,
     confidence_tone,
+    daily_counts,
     day_label,
     grade_tone,
     group_findings,
+    monotone_path,
     percent,
+    ring,
     score_tone,
     shares,
     when,
@@ -87,6 +91,36 @@ def test_shares_add_up_to_a_whole(counts, expected):
     assert [pct for _, _, pct in parts] == expected
     assert [(name, n) for name, n, _ in parts] == list(counts.items())
     assert sum(expected) in (0, 100)
+
+
+def test_daily_counts_fill_in_quiet_days():
+    days = daily_counts({"2026-11-08": 3, "2026-11-05": 1, "2026-10-01": 9}, days=4,
+                        today=NOW.date())
+    assert [(d.isoformat(), n) for d, n in days] == [
+        ("2026-11-05", 1), ("2026-11-06", 0), ("2026-11-07", 0), ("2026-11-08", 3)]
+
+
+def test_the_area_chart_stays_inside_its_box():
+    chart = area_chart([0, 3, 0, 1, 6, 6, 0], width=600, height=160, pad=14)
+    xs = [x for x, _ in chart["points"]]
+    ys = [y for _, y in chart["points"]]
+    assert xs[0] == 0 and xs[-1] == 600 and chart["top"] == 6
+    assert min(ys) == 14 and max(ys) == 146            # the peak at the top, zero on the baseline
+    # monotone curves never swing past a point, so every control point stays in the box too
+    numbers = [float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", chart["line"])]
+    assert all(14 <= y <= 146 for y in numbers[1::2])
+    assert chart["area"].endswith("L600 160 L0 160 Z")
+
+
+def test_charts_of_nothing():
+    flat = area_chart([0, 0, 0])
+    assert {y for _, y in flat["points"]} == {flat["baseline"]}
+    assert area_chart([])["line"] == "" and monotone_path([(1, 2)]) == "M1 2"
+
+
+def test_the_gauge_ring():
+    assert ring(50) == {"r": 52.0, "c": 326.73, "dash": 163.36}
+    assert ring(None)["dash"] == 0 and ring(250)["dash"] == ring(100)["c"]
 
 
 def test_tones_follow_the_repositorys_lines():

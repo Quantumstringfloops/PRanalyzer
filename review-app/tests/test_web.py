@@ -134,10 +134,11 @@ def run_one_pr(store, queue, title="Add a helper", outcome=None, sha=SHA):
 
 
 def stat_counts(page) -> dict[str, int]:
-    """The overview's count per verdict, by the tone each one is drawn in."""
-    found = re.findall(r'<div class="stat tone-(\w+)">.*?<span class="stat-value">(\d+)</span>',
+    """The overview's count per verdict, by the tone each one is drawn in (the PRs-graded tile,
+    toneless, left out)."""
+    found = re.findall(r'<div class="stat tilt tone-(\w+)">.*?<span class="stat-value">(\d+)</span>',
                        page.text, flags=re.DOTALL)
-    return {tone: int(n) for tone, n in found}
+    return {tone: int(n) for tone, n in found if tone != "none"}
 
 
 def test_an_empty_dashboard(store):
@@ -203,6 +204,29 @@ def test_security_headers(store):
     for name, value in SECURITY_HEADERS.items():
         assert response.headers[name] == value
     assert "script-src" not in response.headers["content-security-policy"]
+
+
+def test_the_only_outside_source_is_the_font(store):
+    # the preset's Oxanium comes from Google Fonts; nothing else leaves the dashboard
+    policy = dict(directive.strip().split(" ", 1)
+                  for directive in SECURITY_HEADERS["Content-Security-Policy"].split(";"))
+    assert policy["default-src"] == "'none'"
+    assert policy["style-src"] == "'self' https://fonts.googleapis.com"
+    assert policy["font-src"] == "https://fonts.gstatic.com"
+    assert "unsafe" not in SECURITY_HEADERS["Content-Security-Policy"]
+    page = dashboard(store).get("/").text
+    sheets = re.findall(r'<link rel="stylesheet" href="([^"]+)">', page)
+    assert sheets == ["https://fonts.googleapis.com/css2?family=Oxanium:wght@300..800&amp;display=swap",
+                      "/static/style.css"]
+
+
+def test_the_activity_chart(store, queue):
+    run_one_pr(store, queue)
+    page = dashboard(store).get("/").text
+    assert page.count('<g class="pt') == 14                     # one hover target a day
+    assert page.count('<g class="pt has last">') == 1           # today's decision
+    assert "<strong>1</strong><span>decision in 14 days" in page
+    assert re.search(r'<path class="line" d="M[\d. C-]+"/>', page)
 
 
 def test_a_repository_page(store, queue):

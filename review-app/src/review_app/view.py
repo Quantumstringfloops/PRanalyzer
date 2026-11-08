@@ -1,7 +1,10 @@
-"""What the dashboard's templates need beyond the database rows: labels, tones, relative times and
-groupings. Pure functions, so they're tested without a web app."""
+"""What the dashboard's templates need beyond the database rows: labels, tones, relative times,
+groupings, and the geometry of its SVG charts. Pure functions, so they're tested without a web
+app. (The CSP allows no inline styles, so every shape is computed here and drawn with SVG
+attributes.)"""
+import math
 from collections.abc import Iterable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from review_app.policy import Policy, grade_rank
@@ -128,6 +131,71 @@ def shares(counts: Mapping[str, int]) -> list[tuple[str, int, int]]:
             whole[biggest] -= 1
             whole[name] = 1
     return [(name, n, whole[name]) for name, n in counts.items()]
+
+
+# ── charts ───────────────────────────────────────────────────────────────────────────────
+def daily_counts(counts: Mapping[str, int], days: int = 14,
+                 today: date | None = None) -> list[tuple[date, int]]:
+    """A count for each of the last `days` days, oldest first, from {"2026-11-07": 3}."""
+    last = today or datetime.now(UTC).date()
+    span = [last - timedelta(days=back) for back in range(days - 1, -1, -1)]
+    return [(day, int(counts.get(day.isoformat(), 0))) for day in span]
+
+
+def area_chart(values: list[int], width: float = 600, height: float = 160,
+               pad: float = 14) -> dict[str, Any]:
+    """An SVG area chart's geometry: a smooth line through the values (monotone, so it never
+    swings past a point), the area under it, and each point."""
+    top = max(values, default=0) or 1
+    step = width / max(len(values) - 1, 1)
+    points = [(round(i * step, 1), round(height - pad - v / top * (height - 2 * pad), 1))
+              for i, v in enumerate(values)]
+    line = monotone_path(points)
+    area = (f"{line} L{num(points[-1][0])} {num(height)} L{num(points[0][0])} {num(height)} Z"
+            if points else "")
+    return {"line": line, "area": area, "points": points, "top": top, "width": width,
+            "height": height, "baseline": height - pad}
+
+
+def num(value: float) -> str:
+    """A coordinate for an SVG path: 600 rather than 600.0, 46.2 rather than 46.15384."""
+    return f"{round(value, 1):g}"
+
+
+def monotone_path(points: list[tuple[float, float]]) -> str:
+    """An SVG path through `points` with Fritsch–Carlson monotone cubic curves."""
+    if not points:
+        return ""
+    if len(points) == 1:
+        return f"M{num(points[0][0])} {num(points[0][1])}"
+    xs, ys = zip(*points, strict=True)
+    deltas = [(ys[i + 1] - ys[i]) / ((xs[i + 1] - xs[i]) or 1) for i in range(len(xs) - 1)]
+    slopes = [deltas[0]]
+    slopes += [0.0 if deltas[i - 1] * deltas[i] <= 0 else (deltas[i - 1] + deltas[i]) / 2
+               for i in range(1, len(deltas))]
+    slopes.append(deltas[-1])
+    for i, delta in enumerate(deltas):
+        if delta == 0:
+            slopes[i] = slopes[i + 1] = 0.0
+            continue
+        a, b = slopes[i] / delta, slopes[i + 1] / delta
+        if a * a + b * b > 9:
+            t = 3 / math.hypot(a, b)
+            slopes[i], slopes[i + 1] = t * a * delta, t * b * delta
+    path = [f"M{num(xs[0])} {num(ys[0])}"]
+    for i in range(len(xs) - 1):
+        third = (xs[i + 1] - xs[i]) / 3
+        path.append(f"C{num(xs[i] + third)} {num(ys[i] + slopes[i] * third)} "
+                    f"{num(xs[i + 1] - third)} {num(ys[i + 1] - slopes[i + 1] * third)} "
+                    f"{num(xs[i + 1])} {num(ys[i + 1])}")
+    return " ".join(path)
+
+
+def ring(value: float | None, top: float = 100.0, radius: float = 52.0) -> dict[str, float]:
+    """A circular gauge: the circle's length, and how much of it the value fills."""
+    circumference = 2 * math.pi * radius
+    share = 0.0 if value is None or top <= 0 else max(0.0, min(1.0, value / top))
+    return {"r": radius, "c": round(circumference, 2), "dash": round(circumference * share, 2)}
 
 
 # ── tones: good / warning / serious / critical, always shown with an icon or a label ─────

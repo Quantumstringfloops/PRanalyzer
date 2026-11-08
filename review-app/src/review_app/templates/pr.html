@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import icon, glyph, verdict_glyph, verdict_pill, outcome_text, time_ago, sha, grade_chip, score_meter, audit_event, empty_state %}
+{% from "_macros.html" import icon, glyph, verdict_glyph, verdict_pill, outcome_text, time_ago, sha, grade_chip, score_meter, audit_event, empty_state, tilt_zones %}
 {% block title %}{{ pr.repo }}#{{ pr.number }} · review-app{% endblock %}
 {% block content %}
 <nav class="crumbs" aria-label="Breadcrumb">
@@ -20,7 +20,8 @@
 
 {% set d = decisions[0] if decisions else none %}
 {% if d %}
-<section class="verdict-card tone-{{ verdict_tones.get(d.verdict, 'none') }}" aria-labelledby="verdict-title">
+<section class="card verdict-card tone-{{ verdict_tones.get(d.verdict, 'none') }}" aria-labelledby="verdict-title">
+  <span class="tone-strip" aria-hidden="true"></span>
   <div class="verdict-main">
     <p class="eyebrow">Decision</p>
     <h2 class="verdict-title" id="verdict-title">{{ verdict_glyph(d.verdict) }}{{ d.verdict | verdict }}</h2>
@@ -34,16 +35,28 @@
   </div>
   <div class="figures">
     {% if d.score is not none %}
-    <div class="figure">
-      <span class="figure-label">Score</span>
-      <span class="hero">{{ '%.1f' | format(d.score) }}</span>
-      {% if d.grade %}<span class="figure-sub">grade {{ grade_chip(d.grade, policy) }}</span>{% endif %}
+    {% set g = ring(d.score) %}
+    <div class="gauge tone-{{ score_tone(d.score, policy) }}">
+      <svg viewBox="0 0 120 120" aria-hidden="true">
+        <circle class="gauge-glow" cx="60" cy="60" r="44"/>
+        <circle class="gauge-track" cx="60" cy="60" r="{{ g.r }}"/>
+        <circle class="gauge-value" cx="60" cy="60" r="{{ g.r }}" stroke-dasharray="{{ g.dash }} {{ g.c }}" transform="rotate(-90 60 60)"/>
+      </svg>
+      <div class="gauge-label">
+        <span class="figure-label">Score</span>
+        <span class="hero">{{ '%.1f' | format(d.score) }}</span>
+        {% if d.grade %}<small>grade {{ grade_chip(d.grade, policy) }}</small>{% endif %}
+      </div>
     </div>
     {% endif %}
-    <div class="figure">
-      <span class="figure-label">Confidence</span>
-      <span class="figure-value">{{ '%.2f' | format(d.confidence) }}</span>
-      <span class="figure-sub">needs {{ '%g' | format(policy.merge_min_confidence) }} to merge</span>
+    <div class="confidence-tile tilt tone-{{ confidence_tone(d.confidence, policy) }}">
+      {{ tilt_zones() }}
+      <div class="tilt-body">
+        <span class="figure-label">Confidence</span>
+        <span class="figure-value">{{ '%.2f' | format(d.confidence) }}</span>
+        <span class="figure-sub">needs {{ '%g' | format(policy.merge_min_confidence) }} to merge</span>
+        <span class="meter wide" aria-hidden="true"><span class="fill w{{ d.confidence | pct(1) }}"></span></span>
+      </div>
     </div>
   </div>
   <div class="verdict-why">

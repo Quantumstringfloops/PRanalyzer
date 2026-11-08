@@ -86,12 +86,28 @@ starting, and so do extra host names without a login, so it can't end up exposed
 - **Deliberately missing:** a sign-up endpoint (anyone could register an allowlisted address
   first if email confirmation were off) and password reset. Both are done in Supabase.
 
-The dashboard is server-rendered HTML (Jinja2) with one stylesheet. Its CSP allows no script
-and no inline style, so it has neither: score bars take their width from `.w0`–`.w100` classes,
-and findings fold away with `<details>`. It has five pages:
+The dashboard is server-rendered HTML (Jinja2) with one stylesheet, designed after the shadcn/ui
+preset `b4N1arr72`:
+- style Nova, mauve base and theme, purple chart colors, radius 0.625rem;
+- Oxanium for headings and text, and Tabler icons;
+- the preset's own color tokens, under their shadcn names.
 
-- **Overview**: whether auto-merge is on, the latest decision on each PR counted by verdict,
-  recent decisions, setup health, repositories and the queue.
+Its CSP allows no script and no inline style, so it has neither. Every effect is CSS alone:
+- **3D tilt:** a card tilts toward the pointer through nine invisible hover zones and `:has()`.
+- **The cube:** it spins in 3D and comes apart on hover.
+- **Backdrop and borders:** a perspective grid and drifting color behind the page, and borders
+  lit by an animated conic gradient.
+- **Shapes:** score bars take their width from `.w0`–`.w100` classes. The activity chart and
+  the score gauge are SVG whose coordinates are computed on the server (`view.py`).
+- **Folding:** findings fold away with `<details>`.
+
+The one outside source is the Oxanium font, from Google Fonts: the CSP allows their stylesheet
+and font files and nothing else. Motion stops under `prefers-reduced-motion`. It has six pages:
+
+- **Overview**: a hero saying whether auto-merge is on, the latest decision on each PR counted
+  by verdict, decisions per day over two weeks, recent decisions, setup health, repositories and
+  the queue.
+- **Sign in**: when dashboard login is on.
 - **Repository**: its policy, drawn as score bands, and its PRs.
 - **Pull request**: the decision with its reasons and confidence factors, the analysis by
   dimension, findings grouped by severity (repeats folded), earlier decisions and the audit trail.
