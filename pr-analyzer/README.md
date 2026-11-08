@@ -313,6 +313,16 @@ jobs:
 
 No checkout step is needed: the action reads the PR through the GitHub API and installs pr-analyzer from its own copy of this repository, so the action and the code always match.
 
+**Secrets and pull requests.** On `pull_request`, GitHub runs the workflow file as the pull request has it. Forks get no secrets, but anyone who can push a branch to your repository can change the steps that receive a key such as `OPENAI_API_KEY`. Two rules keep it safe:
+
+- Never pass a secret to code from the pull request. Reference the action by a release tag or commit, as above, rather than checking out the PR and running `uses: ./`.
+- To keep a key even from people who can push branches:
+  - run on `pull_request_target`, which takes the workflow and the action from the base branch;
+  - don't check out the pull request;
+  - store the key as an environment secret, with the environment's deployment branches limited to the default branch.
+
+  This repository's own [PR Analysis workflow](https://github.com/Quantumstringfloops/PRanalyzer/blob/main/.github/workflows/pr-analysis.yml) does both.
+
 | Input | Default | Description |
 |-------|---------|-------------|
 | `github-token` | `github.token` | Reads the PR and posts the review |

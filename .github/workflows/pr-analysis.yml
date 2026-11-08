@@ -1,7 +1,12 @@
 name: PR Analysis
 
+# pull_request_target, not pull_request, because the job gets NVIDIA_API_KEY. On pull_request the
+# workflow, action.yml and pr-analyzer would all come from the pull request's merge commit. Anyone
+# who can push a branch here could then change the code that receives the key and send it
+# elsewhere. On pull_request_target all three come from the base branch, and the pull request is
+# only read, through the GitHub API: none of its code is checked out or run.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
 
 # nothing by default; the one job below asks for what it needs
@@ -15,9 +20,12 @@ concurrency:
 jobs:
   analyze:
     name: Analyze the pull request
-    # PRs from forks get a read-only token and no secrets, so they can't be reviewed
+    # PRs from forks are skipped: they would spend the AI review on anyone's pull request
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # NVIDIA_API_KEY is a secret of this environment, not of the repository. Its deployment
+    # branches are limited to main, so a workflow pushed on any other branch can't read the key.
+    environment: ai-review
     permissions:
       pull-requests: write   # post the review and its inline comments
       contents: read         # read the PR's files and the base branch's .pr-analyzer.toml
@@ -25,9 +33,10 @@ jobs:
     # actions are pinned to commits, since a tag can be moved to different code; the comment
     # names the release
     steps:
-      # the checkout is only there so `uses: ./` finds this repository's action.yml: every PR
-      # here runs the action, and the code, that it changes
-      - name: Checkout code
+      # The base branch, which is what pull_request_target checks out: `uses: ./` then runs
+      # main's action.yml and installs main's pr-analyzer. Never check out the pull request's
+      # head or merge commit in this job: its code would run with the key.
+      - name: Check out the base branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false

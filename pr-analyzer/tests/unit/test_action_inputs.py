@@ -56,3 +56,30 @@ def test_this_repositorys_pr_analysis_reviews_with_nvidia():
     # nothing left over from the OpenAI setup: no key, and no openai extra to install
     assert "openai" not in workflow.lower()
     assert re.search(r"^ +extras: security$", workflow, flags=re.MULTILINE)
+
+
+def workflow_lines() -> list[str]:
+    """The workflow's YAML without its comments."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    return [line.split(" #", 1)[0].rstrip() for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
+
+
+def test_the_key_never_reaches_code_a_pull_request_can_change():
+    # On pull_request, the workflow, action.yml and pr-analyzer all come from the PR's merge
+    # commit, so anyone who can push a branch here could change the code that gets the key.
+    # On pull_request_target they come from the base branch, as long as the job never checks out
+    # the PR.
+    lines = workflow_lines()
+    trigger = lines[lines.index("on:") + 1]
+    assert trigger == "  pull_request_target:"
+    assert "  pull_request:" not in lines
+    yaml = "\n".join(lines)
+    assert "uses: ./" in yaml                              # main's action, from the base checkout
+    assert "ref:" not in yaml                              # so the checkout is the base branch
+    assert "github.event.pull_request.head.sha" not in yaml
+    assert "github.event.pull_request.head.ref" not in yaml
+    assert "persist-credentials: false" in yaml
+    # forks are still skipped, and the key is an environment secret, limited to main there
+    assert "if: github.event.pull_request.head.repo.full_name == github.repository" in yaml
+    assert "    environment: ai-review" in lines
