@@ -252,15 +252,22 @@ A decision is a prediction, so review-app checks it against what happened. The f
    comment failed.
 7. **In GitHub Actions,** without a GitHub App. `.github/workflows/merge-outcome.yml` runs step 6
    with `--comment` and the workflow's `GITHUB_TOKEN`, so the comment comes from
-   github-actions[bot]. It runs when a PR is merged into main (`pull_request_target: closed`),
-   when main's CI finishes on a push (`workflow_run`), daily for PRs merged in the last 8 days,
-   and by hand.
+   github-actions[bot]. It runs:
+   - when a PR is merged into main (`pull_request: closed`);
+   - when main's CI finishes on a push (`workflow_run`);
+   - daily, for PRs merged in the last 8 days;
+   - by hand.
+
+   It uses `pull_request`, not `pull_request_target`. GitHub runs `pull_request_target` from the
+   default branch's copy of a workflow, whatever the PR's base, so a change to it can't be tried
+   on another branch first. `pull_request` runs the merge commit's copy, which is code main
+   already holds once the PR is merged. Merged PRs from forks are skipped there, since a fork's
+   token can't comment. The `workflow_run` look covers them.
    - Each run starts with an empty database, so the comment's id isn't known.
      `PyGithubGateway.put_comment` then looks for `COMMENT_MARKER` in a bot's comment and edits
      it. One that this token can't edit (another bot's) is left alone.
    - The job is named `review-app`, so its own check run isn't counted as CI on the merge commit.
-   - It checks out main and never the PR's branch, holds no secret, and passes event data to its
-     scripts only through env.
+   - It holds no secret, and passes event data to its scripts only through env.
 
 Revert and fix detection read commit messages: a fix without fix-like words in its subject
 isn't seen. Nothing here can merge, revert or change code. It reads, records and comments.

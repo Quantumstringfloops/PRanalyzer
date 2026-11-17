@@ -9,14 +9,17 @@ name: Merge outcome
 # a day until the 7-day watch is over. Each run starts with an empty database: the comment it
 # posted before is found on the PR by its hidden marker and edited in place.
 #
-# pull_request_target and workflow_run both run main's copy of this workflow, with main checked
-# out. That's safe here because:
-# - the job only runs for a PR that's already merged, so main already holds its code;
-# - no pull request's branch is ever checked out or run;
-# - there are no secrets, only GITHUB_TOKEN, which may read and comment and nothing more;
-# - event data reaches the scripts only through env.
+# Why these triggers, and why they're safe:
+# - A merge starts it through pull_request, not pull_request_target. GitHub runs
+#   pull_request_target from the default branch's copy of a workflow, whatever the base, while
+#   pull_request uses the merge commit's: code that main already holds once the PR is merged.
+# - The job only runs for a merged PR, and only for one from a branch of this repository. A fork's
+#   token can't comment, so the look when main's CI finishes covers those PRs.
+# - workflow_run, schedule and workflow_dispatch run main's copy, with main checked out.
+# - There's no secret, only GITHUB_TOKEN, which may read and comment and nothing more.
+# - Event data reaches the scripts only through env.
 on:
-  pull_request_target:
+  pull_request:
     types: [closed]
     branches: [main]
   workflow_run:
@@ -48,9 +51,11 @@ jobs:
     # The check run is named after the job. review-app leaves its own check, "review-app", out of
     # the merge commit's CI, so this run doesn't count as CI that's still running.
     name: review-app
-    # a merged PR; CI that ran on a push to main (not on a pull request); the daily look; by hand
+    # a merged PR from this repository; CI that ran on a push to main (not on a pull request); the
+    # daily look; by hand
     if: >-
-      (github.event_name == 'pull_request_target' && github.event.pull_request.merged) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push') ||
       github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -64,8 +69,8 @@ jobs:
     # actions are pinned to commits, since a tag can be moved to different code; the comment
     # names the release
     steps:
-      # main, with the PR already merged into it. The PR's own branch is never checked out.
-      - name: Check out the base branch
+      # the merge commit, for a merged PR; main's head otherwise
+      - name: Check out the merged code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
@@ -90,7 +95,7 @@ jobs:
           ASKED_PR: ${{ inputs.pr }}
         run: |
           case "$EVENT" in
-            pull_request_target) prs="$MERGED_PR" ;;
+            pull_request) prs="$MERGED_PR" ;;
             workflow_dispatch) prs="$ASKED_PR" ;;
             workflow_run)
               # the PR whose merge this commit is
