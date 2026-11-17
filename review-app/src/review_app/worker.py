@@ -4,9 +4,11 @@ An analysis that fails for a passing reason (a rate limit, GitHub unreachable) i
 One that fails for good still ends in a decision, needs review, so a PR is never left silently
 undecided."""
 import re
+import sqlite3
 import threading
 from contextlib import closing
-from datetime import UTC, timedelta
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import requests
@@ -14,12 +16,12 @@ import structlog
 from github import GithubException, RateLimitExceededException
 from pr_analyzer.exceptions import PRAnalyzerError, RateLimitError
 
-from review_app import snippets
-from review_app.actions import MAX_MERGE_ATTEMPTS, Executor
+from review_app import outcomes, snippets
+from review_app.actions import GITHUB_ERRORS, MAX_MERGE_ATTEMPTS, Executor
 from review_app.analysis import Analyzer
-from review_app.db import Store, clip, utcnow
+from review_app.db import Store, clip, stamp, utcnow
 from review_app.decision import Decision, Verdict, decide
-from review_app.github_app import GitHubAccess, GitHubGateway
+from review_app.github_app import CHECK_NAME, GitHubAccess, GitHubGateway
 from review_app.jobs import Job, JobQueue, backoff, until
 from review_app.models import AnalysisOutcome, PullInfo
 from review_app.policy import PolicyBook
@@ -77,7 +79,8 @@ def analysis_summary(outcome: AnalysisOutcome) -> dict[str, Any]:
 class Worker:
     def __init__(self, store: Store, queue: JobQueue, policies: PolicyBook, analyzer: Analyzer,
                  access: GitHubAccess, *, skip_llm: bool = False, actor: str = "worker",
-                 include_closed: bool = False):
+                 include_closed: bool = False, outcome_comments: bool | None = None,
+                 keep_watching: bool = True, clock=utcnow):
         self.store = store
         self.queue = queue
         self.policies = policies
@@ -88,6 +91,11 @@ class Worker:
         # analyse closed PRs too: for `review-app analyze`, a report on any PR. The merge gates
         # still refuse a PR that isn't open.
         self.include_closed = include_closed
+        # after a merge: comment on the PR (None: only as the GitHub App, if the policy says
+        # so), and queue the next look (off for `review-app outcome`, a one-off)
+        self.outcome_comments = outcome_comments
+        self.keep_watching = keep_watching
+        self.clock = clock
         self.executor = Executor(store, actor)
 
     # ── the loop ────────────────────────────────────────────────────────────────────────
@@ -113,8 +121,10 @@ class Worker:
 
     def process(self, job: Job) -> None:
         where = (job.repo, job.pr_number, job.head_sha)
+        steps = {"analyze": self._analyze, "merge": self._merge_again,
+                 "outcome": self._look_after_merge}
         try:
-            status = self._analyze(job) if job.kind == "analyze" else self._merge_again(job)
+            status = steps[job.kind](job)
             self.queue.finish(job, status)
         except RetryLater as e:
             if self.queue.retry_later(job, str(e), e.delay):
@@ -242,3 +252,134 @@ class Worker:
         with closing(self._gateway(job)) as gateway:
             self.executor.merge(gateway, row["id"], job.repo, job.pr_number, policy, job.head_sha)
         return "done"
+
+    # ── after the merge: how it turned out ──────────────────────────────────────────────
+    def _look_after_merge(self, job: Job) -> str:
+        policy = self.policies.for_repo(job.repo)
+        if not (policy.enabled and policy.track_outcomes):
+            self.store.audit(self.actor, "job.skipped", job.repo, job.pr_number, job.head_sha,
+                             job=job.id, reason="outcome tracking is off for this repository")
+            return "done"
+        with closing(self._gateway(job)) as gateway:
+            pull = self._read_pull(gateway, job)
+            if pull.state != "merged" or not pull.merge_sha:
+                self.store.audit(self.actor, "job.skipped", job.repo, job.pr_number,
+                                 job.head_sha, job=job.id, reason=f"the PR is {pull.state}")
+                return "done"
+            now = self.clock()
+            merged_at = parse_time(pull.merged_at) or now
+            watch_until = merged_at + timedelta(days=policy.outcome_window_days)
+            try:
+                outcome = self._observe(gateway, pull, merged_at, final=now >= watch_until)
+            except Exception as e:
+                delay = retry_delay(e, job.attempts)
+                if delay is not None:
+                    raise RetryLater(e, delay) from e
+                raise
+            decided = self.store.latest_decision(pull.repo, pull.number)
+            call = outcomes.judge(decided["verdict"] if decided else None, outcome.assessment)
+            previous = self.store.merge_outcome(pull.repo, pull.number)
+            outcome_id = self._record_outcome(pull, outcome, merged_at, watch_until, decided,
+                                              call)
+            if self._should_comment(policy, outcome, previous):
+                body = outcomes.report(
+                    outcome, repo=pull.repo, merge_sha=pull.merge_sha,
+                    verdict=decided["verdict"] if decided else None,
+                    confidence=decided["confidence"] if decided else None, call=call,
+                    watch_until=stamp(watch_until), checked_at=stamp(now))
+                self._comment(gateway, pull, outcome_id, body,
+                              previous["comment_id"] if previous else None)
+        upcoming = outcomes.next_look(now, watch_until, outcome.ci.state)
+        if upcoming is not None and self.keep_watching:
+            self.queue.enqueue("outcome", pull.repo, pull.number, pull.merge_sha,
+                               job.installation_id, run_after=upcoming)
+        return "done"
+
+    def _observe(self, gateway: GitHubGateway, pull: PullInfo, merged_at: datetime,
+                 final: bool) -> outcomes.Outcome:
+        """One look: CI on the merge commit, then the base branch's commits since the merge."""
+        ci = outcomes.summarize_checks(gateway.commit_checks(pull.repo, pull.merge_sha),
+                                       ignore=(CHECK_NAME,))
+        commits = [c for c in gateway.commits_since(pull.repo, pull.base_branch, merged_at,
+                                                    outcomes.MAX_COMMITS)
+                   if c.sha != pull.merge_sha]
+        revert = outcomes.find_revert(commits, pull.merge_sha, pull.repo, pull.number,
+                                      pull.title)
+        candidates = [c for c in commits if outcomes.looks_like_fix(c.message)
+                      and (revert is None or c.sha != revert.sha)]
+        follow_ups: tuple[outcomes.FollowUp, ...] = ()
+        if candidates:
+            pr_files = gateway.pull_files(pull.repo, pull.number, outcomes.MAX_PR_FILES)
+            looked_up = [replace(c, files=tuple(gateway.commit_files(pull.repo, c.sha)))
+                         for c in candidates[:outcomes.MAX_FILE_LOOKUPS]]
+            follow_ups = outcomes.follow_up_fixes(looked_up, pr_files)
+        return outcomes.Outcome(outcomes.assess(ci, revert, follow_ups, final), ci, revert,
+                                follow_ups, final)
+
+    def _record_outcome(self, pull: PullInfo, outcome: outcomes.Outcome, merged_at: datetime,
+                        watch_until: datetime, decided: sqlite3.Row | None, call: str) -> int:
+        revert = outcome.revert
+        values = {
+            "merge_sha": pull.merge_sha, "merged_at": stamp(merged_at),
+            "base_branch": pull.base_branch, "assessment": outcome.assessment,
+            "ci_state": outcome.ci.state,
+            "ci": {"passed": list(outcome.ci.passed), "failed": list(outcome.ci.failed),
+                   "pending": list(outcome.ci.pending)},
+            "revert_sha": revert.sha if revert else None,
+            "revert_subject": clip(revert.subject, 300) if revert else None,
+            "follow_ups": [{"sha": f.sha, "subject": clip(f.subject, 300), "files": list(f.files)}
+                           for f in outcome.follow_ups],
+            "decision_id": decided["id"] if decided else None,
+            "verdict": decided["verdict"] if decided else None,
+            "verdict_call": call, "final": outcome.final, "watch_until": stamp(watch_until),
+        }
+        with self.store.transaction() as conn:
+            pr_id = self.store.upsert_pr(conn, pull)
+            outcome_id = self.store.save_merge_outcome(conn, pr_id, values)
+            self.store.audit(self.actor, "outcome.checked", pull.repo, pull.number,
+                             pull.merge_sha, conn=conn, assessment=outcome.assessment,
+                             ci=outcome.ci.state, reverted=revert is not None,
+                             follow_ups=len(outcome.follow_ups), call=call,
+                             final=outcome.final)
+        return outcome_id
+
+    def _should_comment(self, policy: Any, outcome: outcomes.Outcome,
+                        previous: sqlite3.Row | None) -> bool:
+        """Whether to post (or update) the comment on the PR. Asked for explicitly (`review-app
+        outcome --comment`), always. Otherwise only as the GitHub App, with the policy's
+        outcome_comment on, once there's something to say (trouble, or the watch is over), and
+        only when that changed since the last comment."""
+        if self.outcome_comments is not None:
+            return self.outcome_comments
+        if not (self.access.checks and policy.outcome_comment):
+            return False
+        if not (outcome.troubled or outcome.final):
+            return False
+        if previous is None or previous["comment_id"] is None:
+            return True
+        return (previous["assessment"], bool(previous["final"])) != (outcome.assessment,
+                                                                     outcome.final)
+
+    def _comment(self, gateway: GitHubGateway, pull: PullInfo, outcome_id: int, body: str,
+                 comment_id: int | None) -> None:
+        try:
+            posted = gateway.put_comment(pull.repo, pull.number, body, comment_id)
+        except GITHUB_ERRORS as e:
+            # the outcome is recorded either way; the next look tries the comment again
+            self.store.audit(self.actor, "outcome.comment_failed", pull.repo, pull.number,
+                             pull.merge_sha, error=clip(e))
+            return
+        self.store.set_outcome_comment(outcome_id, posted)
+        self.store.audit(self.actor, "outcome.commented", pull.repo, pull.number,
+                         pull.merge_sha, comment=posted, updated=comment_id is not None)
+
+
+def parse_time(text: str) -> datetime | None:
+    """GitHub's "2026-11-08T15:57:51Z" as an aware datetime; None for anything else."""
+    if not text:
+        return None
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)

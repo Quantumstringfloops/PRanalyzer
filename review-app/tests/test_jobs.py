@@ -117,3 +117,26 @@ def test_delays():
     assert until(now + timedelta(seconds=5), now) == timedelta(minutes=1)
     assert until(now + timedelta(minutes=30), now) == timedelta(minutes=30)
     assert until(now + timedelta(days=1), now) == timedelta(hours=1)
+
+
+def test_a_job_can_wait_for_later(store):
+    clock = Clock()
+    queue = JobQueue(store, clock=clock)
+    job_id = queue.enqueue("outcome", "octo/app", 7, NEW_SHA, 11,
+                           run_after=clock.now + timedelta(minutes=10))
+    assert queue.claim() is None                 # not yet
+    clock.advance(timedelta(minutes=10))
+    assert queue.claim().id == job_id
+
+
+def test_asking_for_a_waiting_job_sooner_brings_it_forward(store):
+    clock = Clock()
+    queue = JobQueue(store, clock=clock)
+    job_id = queue.enqueue("outcome", "octo/app", 7, NEW_SHA, 11,
+                           run_after=clock.now + timedelta(days=1))
+    assert queue.enqueue("outcome", "octo/app", 7, NEW_SHA, 11) is None   # the same job
+    assert queue.claim().id == job_id            # now, not tomorrow
+    # asking for it later never pushes a job back
+    later_id = queue.enqueue("outcome", "octo/app", 8, NEW_SHA, 11)
+    queue.enqueue("outcome", "octo/app", 8, NEW_SHA, 11, run_after=clock.now + timedelta(days=1))
+    assert queue.claim().id == later_id

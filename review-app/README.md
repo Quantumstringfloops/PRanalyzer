@@ -100,6 +100,55 @@ as a `review-app` check run on the commit. To let the app merge in a repository,
 Only the webhook port should ever be reachable from outside. Without login, the dashboard
 listens on loopback only and answers only to `localhost` addresses.
 
+## After the merge: how merged PRs turn out
+
+When GitHub reports a PR merged, review-app keeps watching it, for a week by default, and
+records three things:
+- **CI on the merge commit** (on the base branch, so `main`'s CI after the merge). Check runs and
+  commit statuses both count, and review-app's own check is left out.
+- **A revert.** A later commit on the base branch that reverts it: `This reverts commit
+  <the merge commit>`, `Reverts owner/repo#N`, or `Revert "<the PR's title>"`.
+- **Follow-up fixes.** Later commits whose subject looks like a fix (fix, hotfix, bug, broken,
+  regression, repair) and that changed files the PR changed.
+
+Each merge ends up as one of these:
+
+| Result | Meaning |
+|---|---|
+| **watching** | Nothing has gone wrong yet |
+| **held up** | The watch ended with nothing wrong |
+| **fixed later** | Follow-up fixes went into its files |
+| **CI failing** | `main`'s CI fails on the merge commit |
+| **reverted** | A later commit reverted it |
+
+It also judges review-app's own call against that result:
+- **Right:** it said merge and the merge held up, or it held the PR back and the PR then ran into
+  trouble.
+- **Wrong:** it said merge and the PR ran into trouble, or it blocked a PR that held up.
+
+The Merge outcomes page shows each merge and the share of calls that held up.
+
+**When it looks:** first 10 minutes after the merge, then every 15 minutes while CI runs, then
+daily until the window ends. It also looks again whenever CI on the merge commit finishes.
+
+**On GitHub,** running as the GitHub App, it keeps one comment on the merged PR up to date (an
+"after the merge" report). It posts as soon as something goes wrong, and when the watch ends.
+Turn the comment off with `outcome_comment = false`, or the watching itself with
+`track_outcomes = false`. Change the window with `outcome_window_days`. All three are per
+repository, in `review-app.toml`.
+
+To look at any merged PR now, with `GITHUB_TOKEN`:
+
+```bash
+.venv/bin/review-app outcome https://github.com/owner/repo/pull/123
+```
+
+It prints the result and records it for the dashboard. It posts nothing unless you add
+`--comment`.
+
+Revert and follow-up detection read commit messages, so a fix whose subject has none of those
+words isn't seen as one.
+
 ## Dashboard login (Supabase)
 
 The dashboard can require a sign-in. Supabase Auth keeps the accounts and their passwords, and
@@ -160,6 +209,7 @@ The dashboard still changes nothing: these are its only POST endpoints. A POST f
 | `review-app worker` | The worker alone, beside `webhook --no-worker` |
 | `review-app dashboard [--port 8001] [--host ...]` | Read-only dashboard: on localhost, or anywhere once login is set up |
 | `review-app analyze <PR URL> [--post-review]` | Analyse one PR with `GITHUB_TOKEN`, recommend-only |
+| `review-app outcome <PR URL> [--comment]` | Look at how a merged PR turned out, with `GITHUB_TOKEN` |
 | `review-app check-config` | Check `review-app.toml` and the environment, and show each repository's policy |
 | `review-app audit-verify` | Check the audit log's hash chain |
 

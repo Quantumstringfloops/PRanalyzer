@@ -10,10 +10,19 @@ from pr_analyzer.security import tools
 from review_app.db import Store
 from review_app.jobs import JobQueue
 from review_app.models import AnalysisOutcome, ChangedFile, MergeResult, PullInfo
+from review_app.outcomes import CheckResult, CommitInfo
 from review_app.settings import AppSettings
 
 SHA = "a" * 40
 NEW_SHA = "b" * 40
+MERGE_SHA = "d" * 40       # hex, like a real commit's: reverts name it
+MERGED_AT = "2026-11-08T15:57:51Z"
+
+
+def merged_pull(**changes) -> PullInfo:
+    """octo/app#7, merged at MERGED_AT as MERGE_SHA."""
+    return make_pull(**{"state": "merged", "merge_sha": MERGE_SHA, "merged_at": MERGED_AT,
+                        **changes})
 
 
 @pytest.fixture(autouse=True)
@@ -111,13 +120,24 @@ class FakeGateway:
 
     def __init__(self, *pulls: PullInfo, merge: MergeResult | Exception | None = None,
                  check_run_error: Exception | None = None,
-                 reviewers_error: Exception | None = None, pull_error: Exception | None = None):
+                 reviewers_error: Exception | None = None, pull_error: Exception | None = None,
+                 checks: list[CheckResult] | None = None, commits: list[CommitInfo] | None = None,
+                 files: dict[str, list[str]] | None = None, pr_files: list[str] | None = None,
+                 comment_error: Exception | None = None):
         self.pulls = list(pulls) or [make_pull()]
         self.merge_result = merge if merge is not None else MergeResult(True, "Merged",
                                                                        sha="c" * 40)
         self.check_run_error = check_run_error
         self.reviewers_error = reviewers_error
         self.pull_error = pull_error
+        # after the merge: CI on the merge commit, the base branch's later commits (newest
+        # first, as GitHub lists them), each commit's files, the PR's files, the comments posted
+        self.checks = checks or []
+        self.commits = commits or []
+        self.files = files or {}
+        self.pr_files = pr_files if pr_files is not None else ["src/app.py"]
+        self.comment_error = comment_error
+        self.comments: dict[int, str] = {}
         self.calls: list[tuple] = []
         self.closed = False
 
@@ -142,6 +162,30 @@ class FakeGateway:
         self.calls.append(("reviewers", users, teams))
         if self.reviewers_error is not None:
             raise self.reviewers_error
+
+    def commit_checks(self, repo, sha) -> list[CheckResult]:
+        self.calls.append(("checks", sha))
+        return self.checks
+
+    def commits_since(self, repo, branch, since, limit) -> list[CommitInfo]:
+        self.calls.append(("commits", branch, since))
+        return self.commits[:limit]
+
+    def commit_files(self, repo, sha) -> list[str]:
+        self.calls.append(("commit_files", sha))
+        return self.files.get(sha, [])
+
+    def pull_files(self, repo, number, limit) -> list[str]:
+        self.calls.append(("pull_files", number))
+        return self.pr_files[:limit]
+
+    def put_comment(self, repo, number, body, comment_id) -> int:
+        self.calls.append(("comment", number, comment_id))
+        if self.comment_error is not None:
+            raise self.comment_error
+        posted = comment_id if comment_id is not None else 900 + len(self.comments)
+        self.comments[posted] = body
+        return posted
 
     def close(self) -> None:
         self.closed = True

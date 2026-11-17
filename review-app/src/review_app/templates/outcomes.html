@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, glyph, empty_state, tilt_zones, time_ago, sha, verdict_pill %}
+{% block title %}Merge outcomes · review-app{% endblock %}
+{% block content %}
+<header class="page-head split-head">
+  <div class="page-head">
+    <p class="eyebrow">{{ icon('trending') }}Review</p>
+    <h1>Merge outcomes</h1>
+    <p class="lede">After a PR is merged, review-app keeps watching it: the CI on the merge commit, a revert, fixes that went into its files later. Here is how each merge turned out, and how review-app's call held up.</p>
+  </div>
+  <nav class="segmented" aria-label="Show">
+    <a href="/outcomes"{% if not assessment %} class="on" aria-current="true"{% endif %}>All <span class="muted">{{ total }}</span></a>
+    {% for value, label in assessment_labels.items() %}
+    <a href="/outcomes?assessment={{ value }}"{% if assessment == value %} class="on" aria-current="true"{% endif %}>{{ label }} <span class="muted">{{ counts.get(value, 0) }}</span></a>
+    {% endfor %}
+  </nav>
+</header>
+
+{% set troubled = counts.get('fixed_later', 0) + counts.get('ci_failing', 0) + counts.get('reverted', 0) %}
+<section class="kpis" aria-label="Merge outcomes">
+  <div class="kpi tilt">
+    {{ tilt_zones() }}
+    <div class="tilt-body">
+      <strong class="kpi-value">{{ total }}</strong>
+      <span class="kpi-label">Merged PRs watched<span class="info" title="Each is watched for the repository's outcome window, 7 days by default">{{ icon('info') }}</span></span>
+    </div>
+  </div>
+  <div class="kpi tilt">
+    {{ tilt_zones() }}
+    <div class="tilt-body">
+      <strong class="kpi-value">{{ counts.get('healthy', 0) }}</strong>
+      <span class="kpi-label">Held up<span class="info" title="Watched to the end: no CI failure on the merge commit, no revert, no follow-up fix to its files">{{ icon('info') }}</span></span>
+    </div>
+  </div>
+  <div class="kpi tilt">
+    {{ tilt_zones() }}
+    <div class="tilt-body">
+      <strong class="kpi-value">{{ troubled }}</strong>
+      <span class="kpi-label">Ran into trouble<span class="info" title="Reverted, CI failing on the merge commit, or fixed later in its files">{{ icon('info') }}</span></span>
+    </div>
+  </div>
+  <div class="kpi tilt">
+    {{ tilt_zones() }}
+    <div class="tilt-body">
+      <strong class="kpi-value">{% if track.rate is not none %}{{ track.rate }}%{% else %}—{% endif %}</strong>
+      <span class="kpi-label">review-app's calls held up<span class="info" title="{{ track.held }} of {{ track.judged }}: it said merge and the merge held up, or it held a PR back that then ran into trouble. Calls left to a person, and merges still being watched, aren't counted.">{{ icon('info') }}</span></span>
+    </div>
+  </div>
+</section>
+
+<section class="card" aria-labelledby="outcomes-title">
+  <header class="card-head">
+    <h2 id="outcomes-title">{{ icon('merge') }}{{ assessment_labels.get(assessment, 'All merges') }}</h2>
+    <span class="aside">newest merge first</span>
+  </header>
+  {% if rows %}
+  <ol class="rows">
+    {% for o in rows %}
+    <li class="row tone-{{ assessment_tones[o.assessment] }}">
+      <div class="row-head">
+        <a class="row-title" href="/prs/{{ o.pr_id }}">{{ o.title or 'Untitled pull request' }}</a>
+        <span class="pill tone-{{ assessment_tones[o.assessment] }}">{{ glyph(assessment_glyphs[o.assessment]) }}{{ assessment_labels[o.assessment] }}</span>
+      </div>
+      <div class="row-meta">
+        <span class="mono">{{ o.repo }}#{{ o.number }}</span>
+        <span>{{ icon('merge') }}merged {{ time_ago(o.merged_at) }}</span>
+        <span class="tag tone-{{ ci_tones[o.ci_state] }}">{{ ci_labels[o.ci_state] }}</span>
+        {% if o.revert_sha %}<span class="tag tone-critical">reverted in {{ o.revert_sha[:7] }}</span>{% endif %}
+        {% if o.follow_ups %}<span class="tag tone-warning">{{ o.follow_ups | length }} follow-up fix{{ 'es' if o.follow_ups | length != 1 }}</span>{% endif %}
+        <span class="tag tone-{{ call_tones[o.verdict_call] }}">{% if o.verdict %}said {{ o.verdict | verdict }} · {% endif %}{{ call_labels[o.verdict_call] }}</span>
+        <span class="muted">{% if o.final %}final{% else %}watching until {{ o.watch_until[:10] }}{% endif %}</span>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  {% call empty_state('No merges watched yet' if not assessment else 'None ' ~ assessment_labels[assessment] | lower, 'trending') %}When a PR is merged, the webhook server starts watching it here. To look at one now, run <code>review-app outcome &lt;PR URL&gt;</code>.{% endcall %}
+  {% endif %}
+</section>
+{% endblock %}

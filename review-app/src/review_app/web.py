@@ -120,6 +120,15 @@ JOBS_PAGE = (
     " LEFT JOIN pull_requests p ON p.repo = j.repo AND p.number = j.pr_number"
     " ORDER BY j.id DESC LIMIT ?"
 )
+# after the merge: the merged PRs watched, newest merge first, and how they're spread
+OUTCOMES_PAGE = (
+    "SELECT o.*, p.id AS pr_id, p.repo, p.number, p.title, p.author FROM merge_outcomes o"
+    " JOIN pull_requests p ON p.id = o.pr_id"
+    " WHERE (:assessment = '' OR o.assessment = :assessment)"
+    " ORDER BY o.merged_at DESC LIMIT :limit"
+)
+OUTCOME_COUNTS = "SELECT assessment, COUNT(*) AS n FROM merge_outcomes GROUP BY assessment"
+CALL_COUNTS = "SELECT verdict_call, COUNT(*) AS n FROM merge_outcomes GROUP BY verdict_call"
 # every analysis of the pull requests analysed since a moment, oldest first: the findings and
 # their states are worked out from these (view.track_findings)
 FINDINGS_ANALYSES = (
@@ -290,6 +299,9 @@ def create_dashboard_app(store: Store, policies: PolicyBook,
         finding_states=view.FINDING_STATES, finding_types=view.FINDING_TYPES,
         category_icons=view.CATEGORY_ICONS, qs=view.query_string,
         github_file=view.github_file_url,
+        assessment_labels=view.ASSESSMENT_LABELS, assessment_tones=view.ASSESSMENT_TONES,
+        assessment_glyphs=view.ASSESSMENT_GLYPHS, call_labels=view.CALL_LABELS,
+        call_tones=view.CALL_TONES, ci_labels=view.CI_LABELS, ci_tones=view.CI_TONES,
     )
     templates = Jinja2Templates(env=env)
     queue = JobQueue(store)
@@ -377,13 +389,16 @@ def create_dashboard_app(store: Store, policies: PolicyBook,
             first_day = datetime.now(UTC).date() - timedelta(days=ACTIVITY_DAYS - 1)
             per_day = {row["day"]: row["n"]
                        for row in conn.execute(ACTIVITY, (first_day.isoformat(),))}
+            after = {row["assessment"]: row["n"] for row in conn.execute(OUTCOME_COUNTS)}
+            calls = {row["verdict_call"]: row["n"] for row in conn.execute(CALL_COUNTS)}
         checks = health or []
         activity = view.daily_counts(per_day, days=ACTIVITY_DAYS)
         return page(request, "index.html", repos=repos, decisions=decisions, health=checks,
                     ready=sum(1 for _, ok, _ in checks if ok), jobs=queue.counts(),
                     split=view.shares({v: verdicts.get(v, 0) for v in view.VERDICT_LABELS}),
                     graded=sum(verdicts.values()), merged=merged, activity=activity,
-                    chart=view.area_chart([n for _, n in activity]))
+                    chart=view.area_chart([n for _, n in activity]), after=after,
+                    track=view.track_record(calls))
 
     @app.get("/repos/{owner}/{name}", response_class=HTMLResponse)
     def repo(request: Request, owner: str, name: str) -> HTMLResponse:
@@ -416,6 +431,8 @@ def create_dashboard_app(store: Store, policies: PolicyBook,
                 "SELECT * FROM audit_log WHERE repo = ? AND pr_number = ? ORDER BY id DESC"
                 " LIMIT 200", (pr["repo"], pr["number"]),
             ).fetchall()
+            watched = conn.execute("SELECT * FROM merge_outcomes WHERE pr_id = ?",
+                                   (pr_id,)).fetchone()
         analysis = None
         if latest is not None:
             analysis = {**dict(latest), "findings": loads(latest["findings"], []),
@@ -424,6 +441,7 @@ def create_dashboard_app(store: Store, policies: PolicyBook,
         return page(request, "pr.html", pr=pr, decisions=decisions, analysis=analysis,
                     groups=view.group_findings(analysis["findings"]) if analysis else [],
                     policy=policies.for_repo(pr["repo"]),
+                    after=outcome_view(watched) if watched is not None else None,
                     events=[{**dict(e), "details": loads(e["details"], {})} for e in events],
                     github_url=f"https://github.com/{pr['repo']}/pull/{pr['number']}")
 
@@ -447,6 +465,20 @@ def create_dashboard_app(store: Store, policies: PolicyBook,
         with store.read() as conn:
             rows = conn.execute(JOBS_PAGE, (PAGE_SIZE,)).fetchall()
         return page(request, "jobs.html", jobs=rows, counts=queue.counts())
+
+    @app.get("/outcomes", response_class=HTMLResponse)
+    def outcomes_page(request: Request, assessment: str = "") -> HTMLResponse:
+        """The merged PRs review-app watched, how each turned out, and how its calls held up."""
+        if assessment not in view.ASSESSMENT_LABELS:
+            assessment = ""
+        with store.read() as conn:
+            rows = [outcome_view(r) for r in conn.execute(
+                OUTCOMES_PAGE, {"assessment": assessment, "limit": PAGE_SIZE})]
+            counts = {row["assessment"]: row["n"] for row in conn.execute(OUTCOME_COUNTS)}
+            calls = {row["verdict_call"]: row["n"] for row in conn.execute(CALL_COUNTS)}
+        return page(request, "outcomes.html", rows=rows, counts=counts,
+                    total=sum(counts.values()), track=view.track_record(calls),
+                    assessment=assessment)
 
     @app.get("/static/{name}")
     def static(name: str) -> FileResponse:
@@ -778,3 +810,8 @@ def recent_decisions(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
         " JOIN pull_requests p ON p.id = d.pr_id LEFT JOIN analyses a ON a.id = d.analysis_id"
         " ORDER BY d.id DESC LIMIT ?", (limit,),
     ).fetchall()
+
+
+def outcome_view(row: sqlite3.Row) -> dict[str, Any]:
+    """A merge_outcomes row with its JSON columns read."""
+    return {**dict(row), "ci": loads(row["ci"], {}), "follow_ups": loads(row["follow_ups"], [])}

@@ -20,6 +20,8 @@ class PullInfo:
     changed_files: int = 0
     additions: int = 0
     deletions: int = 0
+    merge_sha: str = ""           # the merge (or squash) commit, once merged
+    merged_at: str = ""           # ISO, UTC, once merged
 
     @property
     def is_fork(self) -> bool:

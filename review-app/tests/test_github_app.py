@@ -55,7 +55,7 @@ def api_pr(**changes):
         "head": SimpleNamespace(sha=SHA, repo=SimpleNamespace(id=1)),
         "base": SimpleNamespace(ref="main", repo=SimpleNamespace(id=1, default_branch="main")),
         "draft": False, "merged": False, "state": "open", "changed_files": 2, "additions": 3,
-        "deletions": 1,
+        "deletions": 1, "merge_commit_sha": None, "merged_at": None,
     }
     values.update(changes)
     return SimpleNamespace(**values)
@@ -76,7 +76,13 @@ def test_a_deleted_fork_counts_as_a_fork():
 
 
 def test_a_merged_pr_says_so():
-    assert pull_from_api("octo/app", api_pr(merged=True, state="closed")).state == "merged"
+    merged_at = datetime(2026, 11, 8, 15, 57, 51, tzinfo=UTC)
+    pull = pull_from_api("octo/app", api_pr(merged=True, state="closed", merged_at=merged_at,
+                                            merge_commit_sha="m" * 40))
+    assert (pull.state, pull.merge_sha, pull.merged_at) == ("merged", "m" * 40,
+                                                            "2026-11-08T15:57:51Z")
+    # GitHub fills merge_commit_sha in for open PRs too (a test merge): only a merge counts
+    assert pull_from_api("octo/app", api_pr(merge_commit_sha="t" * 40)).merge_sha == ""
 
 
 class FakePull:

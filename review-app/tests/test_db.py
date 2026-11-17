@@ -3,14 +3,37 @@ import sqlite3
 import pytest
 from conftest import make_pull
 
-from review_app.db import GENESIS_HASH, Store
+from review_app.db import GENESIS_HASH, MERGE_OUTCOMES_TABLE, SCHEMA, SCHEMA_VERSION, Store
+from review_app.jobs import JobQueue
 
 
 def test_init_is_idempotent(store):
     store.init()
     store.init()
     with store.read() as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 2
+
+
+def test_a_version_1_database_is_brought_up_to_date(tmp_path):
+    # version 1 as it shipped: no "outcome" job kind, no merge_outcomes
+    v1 = SCHEMA.replace("'analyze', 'merge', 'outcome'", "'analyze', 'merge'").replace(
+        MERGE_OUTCOMES_TABLE, "")
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("BEGIN;" + v1 + "PRAGMA user_version = 1;COMMIT;")
+    conn.close()
+    store = Store(path)
+    JobQueue(store).enqueue("analyze", "octo/app", 7, "a" * 40, 11)   # works on version 1
+    store.audit("worker", "decision.made", "octo/app", 7, verdict="merge")
+
+    store.init()
+
+    with store.read() as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert [r["kind"] for r in conn.execute("SELECT kind FROM jobs")] == ["analyze"]
+        assert conn.execute("SELECT COUNT(*) FROM merge_outcomes").fetchone()[0] == 0
+    assert JobQueue(store).enqueue("outcome", "octo/app", 7, "b" * 40, 11) is not None
+    assert store.verify_audit_chain() == (True, None, 1)
 
 
 def test_an_unknown_schema_version_is_refused(store):

@@ -149,6 +149,19 @@
         {% endfor %}
       </div>
     </section>
+
+    <section class="card" aria-labelledby="after-title">
+      <header class="card-head">
+        <h2 id="after-title">{{ icon('trending') }}After the merge</h2>
+        <a class="aside" href="/outcomes">All outcomes {{ icon('arrow-right') }}</a>
+      </header>
+      <div class="mini-stats">
+        {% for value in ('healthy', 'watching', 'fixed_later', 'reverted') %}
+        <div class="mini-stat tone-{{ assessment_tones[value] }}"><span class="value">{{ after.get(value, 0) + (after.get('ci_failing', 0) if value == 'reverted' else 0) }}</span><span class="label"><span class="dot"></span>{{ 'Reverted or CI failing' if value == 'reverted' else assessment_labels[value] }}</span></div>
+        {% endfor %}
+      </div>
+      <p class="note after-note">{% if track.rate is not none %}review-app's calls held up {{ track.rate }}% of the time ({{ track.held }} of {{ track.judged }}).{% else %}Once merged PRs have been watched, how review-app's calls held up shows here.{% endif %}</p>
+    </section>
   </div>
 </div>
 {% endblock %}

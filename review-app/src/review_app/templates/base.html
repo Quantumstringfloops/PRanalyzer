@@ -38,6 +38,7 @@
         ('Governance', [('/standards', 'Review standards', 'book', 'Beta', path == '/standards')]),
         ('Review', [('/triage', 'PR Triage', 'pull-request', 'Preview', path == '/triage' or path.startswith('/prs/')),
                     ('/findings', 'Findings', 'bug', '', path == '/findings'),
+                    ('/outcomes', 'Merge outcomes', 'trending', 'New', path == '/outcomes'),
                     (none, 'Workflows', 'route', 'Soon', false)]),
         ('Activity', [('/audit', 'Audit log', 'list', '', path.startswith('/audit')),
                       ('/jobs', 'Jobs', 'layers', '', path.startswith('/jobs'))]),

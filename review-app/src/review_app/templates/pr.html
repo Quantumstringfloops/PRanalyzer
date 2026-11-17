@@ -87,6 +87,26 @@
 </section>
 {% endif %}
 
+{% if after %}
+<section class="card after-card tone-{{ assessment_tones[after.assessment] }}" aria-labelledby="after-title">
+  <header class="card-head">
+    <h2 id="after-title">{{ icon('trending') }}After the merge</h2>
+    <span class="aside">{% if after.final %}final, after {{ after.looks }} look{{ 's' if after.looks != 1 }}{% else %}watching until {{ after.watch_until[:10] }} · {{ after.looks }} look{{ 's' if after.looks != 1 }} so far{% endif %}</span>
+  </header>
+  <p class="after-headline"><span class="pill tone-{{ assessment_tones[after.assessment] }}">{{ glyph(assessment_glyphs[after.assessment]) }}{{ assessment_labels[after.assessment] }}</span>
+    <span class="muted">merged {{ time_ago(after.merged_at) }} into <code>{{ after.base_branch }}</code> as {{ sha(after.merge_sha) }}</span></p>
+  <dl class="gates">
+    <div><dt>CI on the merge commit</dt><dd><span class="tag tone-{{ ci_tones[after.ci_state] }}">{{ ci_labels[after.ci_state] }}</span>
+      {% if after.ci.failed %} failed: {% for name in after.ci.failed %}<code>{{ name }}</code> {% endfor %}{% endif %}
+      {% if after.ci.passed %}<span class="muted">{{ after.ci.passed | length }} passed</span>{% endif %}
+      {% if after.ci.pending %}<span class="muted">· {{ after.ci.pending | length }} still running</span>{% endif %}</dd></div>
+    <div><dt>Reverted</dt><dd>{% if after.revert_sha %}yes, in <a href="https://github.com/{{ pr.repo }}/commit/{{ after.revert_sha }}" rel="noreferrer noopener">{{ after.revert_sha[:7] }}</a> {{ after.revert_subject }}{% else %}no{% endif %}</dd></div>
+    <div><dt>Follow-up fixes to its files</dt><dd>{% for fix in after.follow_ups %}<div><a href="https://github.com/{{ pr.repo }}/commit/{{ fix.sha }}" rel="noreferrer noopener">{{ fix.sha[:7] }}</a> {{ fix.subject }} {% for f in fix.files %}<code>{{ f }}</code> {% endfor %}</div>{% else %}none{% endfor %}</dd></div>
+    <div><dt>review-app's call</dt><dd>{% if after.verdict %}{{ verdict_pill(after.verdict) }} {% endif %}<span class="tag tone-{{ call_tones[after.verdict_call] }}">{{ call_labels[after.verdict_call] }}</span></dd></div>
+  </dl>
+</section>
+{% endif %}
+
 {% if analysis %}
 <section class="card" aria-labelledby="analysis-title">
   <header class="card-head">

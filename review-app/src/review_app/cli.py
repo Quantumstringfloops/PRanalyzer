@@ -21,6 +21,7 @@ from review_app.auth import Allowlist
 from review_app.db import Store
 from review_app.github_app import AppAccess, InstallationTokens, TokenAccess
 from review_app.jobs import MAX_ATTEMPTS, Job, JobQueue
+from review_app.outcomes import ASSESSMENT_TEXT, CALL_TEXT, VERDICT_TEXT
 from review_app.policy import REPO_NAME, PolicyBook, PolicyError, load_policy
 from review_app.settings import AppSettings, SettingsError, use_nvidia_by_default
 from review_app.web import create_dashboard_app, create_webhook_app
@@ -234,6 +235,51 @@ def analyze(
                f"mode {row['mode']}, outcome {row['outcome']})")
     for reason in json.loads(row["reasons"]):
         typer.echo(f"  - {reason}")
+
+
+@app.command()
+def outcome(
+    pr_url: Annotated[str, typer.Argument(help="https://github.com/<owner>/<repo>/pull/<number>")],
+    comment: Annotated[bool, typer.Option(
+        "--comment/--no-comment",
+        help="Post the report on the PR (needs a GITHUB_TOKEN that can write to it)",
+    )] = False,
+) -> None:
+    """Look now at how a merged PR turned out, with GITHUB_TOKEN, and print it: CI on the merge
+    commit, a revert, follow-up fixes to its files, and review-app's call against all that.
+    One look: the webhook server's worker is what keeps watching."""
+    setup_logging(analyzer_settings.log_level)
+    match = PR_URL.match(pr_url.strip())
+    if match is None or not REPO_NAME.fullmatch(match["repo"]):
+        fail("Expected https://github.com/<owner>/<repo>/pull/<number>")
+    repo, number = match["repo"], int(match["number"])
+    _, policies, store = load()
+    policy = policies.for_repo(repo).model_copy(update={"enabled": True, "track_outcomes": True})
+    loop = Worker(store, JobQueue(store), PolicyBook(defaults=policy, source=policies.source),
+                  PrAnalyzer(), TokenAccess(analyzer_settings.github_token), actor="cli",
+                  outcome_comments=comment, keep_watching=False)
+    job = Job(id=0, kind="outcome", repo=repo, pr_number=number, head_sha="",
+              installation_id=None, attempts=MAX_ATTEMPTS)
+    typer.echo(f"Looking at how {repo}#{number} turned out…", err=True)
+    loop.process(job)
+    row = store.merge_outcome(repo, number)
+    if row is None:
+        fail(f"Nothing was recorded: {repo}#{number} may not be merged. "
+             "See the audit log (review-app dashboard).")
+    emoji, headline = ASSESSMENT_TEXT[row["assessment"]]
+    ci = json.loads(row["ci"])
+    follow_ups = json.loads(row["follow_ups"])
+    watch = "final" if row["final"] else f"still watching until {row['watch_until'][:10]}"
+    typer.echo(f"\n{emoji} {headline}  ({watch})")
+    typer.echo(f"  CI on {row['merge_sha'][:7]}: {row['ci_state']}"
+               + (f" (failed: {', '.join(ci['failed'])})" if ci.get("failed") else ""))
+    typer.echo("  Reverted: " + (f"yes, in {row['revert_sha'][:7]} {row['revert_subject']}"
+                                 if row["revert_sha"] else "no"))
+    typer.echo(f"  Follow-up fixes to its files: {len(follow_ups)}")
+    for fix in follow_ups:
+        typer.echo(f"    - {fix['sha'][:7]} {fix['subject']} ({', '.join(fix['files'])})")
+    verdict = VERDICT_TEXT.get(row["verdict"] or "", "no decision")
+    typer.echo(f"  review-app's call: {verdict}: {CALL_TEXT[row['verdict_call']]}")
 
 
 @app.command("check-config")

@@ -18,6 +18,10 @@ review_paths = [".github/**", ".pr-analyzer.toml", "CODEOWNERS"]
 reviewers = []                 # GitHub logins asked to review, in auto mode
 team_reviewers = []            # team slugs
 post_review = true             # post pr-analyzer's review and inline comments
+# after a merge: watch how the PR turns out (CI on the merge commit, a revert, follow-up fixes)
+track_outcomes = true
+outcome_window_days = 7        # 1-90: how long a merged PR is watched
+outcome_comment = true         # keep one comment on the merged PR up to date with how it went
 
 # A repository that lets the app merge for real:
 # [repos."owner/name"]

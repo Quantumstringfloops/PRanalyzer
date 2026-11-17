@@ -187,6 +187,46 @@ These are built in and can't be switched off:
   behind the app's back breaks the chain. `review-app audit-verify` and the dashboard check
   that chain.
 
+## After the merge
+
+A decision is a prediction. Once a PR is merged, by review-app or by a person, review-app keeps
+watching it for a while (a week by default) to see how the merge actually went.
+
+**What it checks**, each time it looks:
+- **CI on the merge commit:** did the base branch's checks pass with the PR in? review-app's
+  own check is left out.
+- **A revert:** did a later commit on the base branch undo it? It recognises the messages git and
+  GitHub write: "This reverts commit …", "Reverts owner/repo#N", `Revert "<title>"`.
+- **Follow-up fixes:** did later commits whose subject sounds like a fix (fix, hotfix, bug,
+  broken, regression, repair) change the same files?
+
+**What it concludes:**
+
+| Result | Meaning |
+|---|---|
+| Watching | Nothing has gone wrong yet |
+| Held up | The watch ended with nothing wrong |
+| Fixed later | Follow-up fixes went into its files |
+| CI failing | The base branch's CI fails on the merge commit |
+| Reverted | Someone undid it |
+
+**How review-app's own call compares:**
+- **Right:** "merge" and the merge held up, or "needs review" or "block" and it ran into trouble.
+- **Wrong:** "merge" and it ran into trouble, or "block" and it held up.
+- **Neither:** "needs review" and it held up, which shows as "Left to a person".
+
+The Merge outcomes page adds these up into a track record.
+
+**When it looks:** 10 minutes after the merge, every 15 minutes while CI runs, then daily until
+the window ends. It also looks whenever CI on the merge commit finishes.
+
+**What shows on GitHub:** running as the GitHub App, it keeps one comment on the merged PR up to
+date. It comments as soon as something goes wrong, and when the watch ends. Policy keys:
+`track_outcomes`, `outcome_window_days`, `outcome_comment`.
+
+**One limit:** reverts and fixes are found from commit messages. A fix described without any of
+those words isn't recognised as one.
+
 ## The dashboard
 
 `review-app dashboard` serves a website at http://localhost:8001/. It only reads. **Nothing on
@@ -203,8 +243,9 @@ through repositories, pull requests and findings.
 | Review standards (beta) | The thresholds from `review-app.toml`: the defaults, and each repository's own table |
 | PR Triage (preview) | A board of PRs by what they need next: needs review, blocked, ready to merge, merged or closed |
 | Findings | Every finding across PRs, with a state. See below |
+| Merge outcomes (new) | Every merged PR watched, how it turned out, and how review-app's calls held up. See "After the merge" |
 | Workflows | Shown as coming soon; there's nothing behind it yet |
-| Pull request | The decision with its reasons and score, the three confidence factors, the score for each dimension, findings grouped by severity, earlier decisions, and the PR's audit trail |
+| Pull request | The decision with its reasons and score, the three confidence factors, how the merge turned out (once merged), the score for each dimension, findings grouped by severity, earlier decisions, and the PR's audit trail |
 | Audit log | Every recorded step, by day, with filters by repository and action, and whether the hash chain is intact |
 | Jobs | The queue: how many jobs are queued, running, done or failed, and the latest ones |
 | Configurations | The settings the dashboard started with, read-only. Secrets are never shown |
@@ -261,6 +302,7 @@ default, or the path in `REVIEW_APP_DB`.
 | `analyses` | Each pr-analyzer run: score, grade, findings, warnings, the AI model used, how long it took |
 | `decisions` | Each decision: verdict, confidence, reasons, the facts behind it, and what happened (merged, blocked, ...) |
 | `jobs` | The work queue |
+| `merge_outcomes` | How each merged PR turned out: CI on the merge commit, a revert, follow-up fixes, and review-app's call against it |
 | `deliveries` | The webhook delivery ids already handled, so repeats are ignored |
 | `audit_log` | The append-only, hash-chained record of everything |
 
@@ -302,6 +344,7 @@ repository that differs.
 | `review_paths` | `.github/**`, `.pr-analyzer.toml`, `CODEOWNERS` | Paths that always go to a person |
 | `reviewers` / `team_reviewers` | none | Who's asked to review in auto mode |
 | `post_review` | `true` | Post pr-analyzer's review on the PR |
+| `track_outcomes` / `outcome_window_days` / `outcome_comment` | `true` / 7 / `true` | Watch merged PRs, for how many days, and keep a comment on the PR about it |
 
 `review-app check-config` checks both files and prints each repository's policy. An invalid
 policy stops the app from starting rather than running on rules you didn't mean.
@@ -311,6 +354,7 @@ policy stops the app from starting rather than running on rules you didn't mean.
 | Command | What it does |
 |---|---|
 | `review-app analyze <PR URL> [--post-review]` | Grade one PR now with `GITHUB_TOKEN`. Prints the decision, merges nothing, posts nothing unless you ask |
+| `review-app outcome <PR URL> [--comment]` | Look now at how a merged PR turned out. Prints it and records it, and posts nothing unless you ask |
 | `review-app dashboard [--port 8001]` | The dashboard |
 | `review-app webhook [--port 8000] [--no-worker]` | Receive GitHub's webhooks, and run the worker too unless told not to |
 | `review-app worker` | The worker alone, beside `webhook --no-worker` |
