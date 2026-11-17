@@ -8,6 +8,8 @@ name: PR Analysis
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
+    # demo only: its ai-review environment only deploys from main, so it would fail here
+    branches: [main]
 
 # nothing by default; the one job below asks for what it needs
 permissions: {}

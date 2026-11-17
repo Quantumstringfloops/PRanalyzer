@@ -7,12 +7,14 @@ from github import GithubException, RateLimitExceededException
 
 from review_app.github_app import (
     CHECK_NAME,
+    MAX_COMMENTS,
     AppAccess,
     InstallationTokens,
     PyGithubGateway,
     TokenAccess,
     pull_from_api,
 )
+from review_app.outcomes import COMMENT_MARKER
 
 
 class FakeIntegration:
@@ -144,3 +146,102 @@ def test_check_runs_are_completed_with_the_conclusion():
     assert (created["head_sha"], created["status"], created["conclusion"]) == (
         SHA, "completed", "neutral")
     assert len(created["output"]["title"]) == 255
+
+
+# ── the "after the merge" comment ────────────────────────────────────────────────────────
+class FakeComment:
+    def __init__(self, id, body, kind="Bot", error=None):
+        self.id = id
+        self.body = body
+        self.user = SimpleNamespace(type=kind)
+        self.error = error
+        self.edited = None
+
+    def edit(self, body):
+        if self.error is not None:
+            raise self.error
+        self.edited = body
+
+
+class FakeIssue:
+    def __init__(self, *comments):
+        self.comments = list(comments)
+        self.created = []
+
+    def get_comment(self, comment_id):
+        for comment in self.comments:
+            if comment.id == comment_id:
+                return comment
+        raise GithubException(404, {"message": "Not Found"}, None)
+
+    def get_comments(self):
+        return iter(self.comments)
+
+    def create_comment(self, body):
+        self.created.append(body)
+        return SimpleNamespace(id=999)
+
+
+def gateway_on(issue: FakeIssue) -> PyGithubGateway:
+    gateway = PyGithubGateway(None)
+    gateway._github = SimpleNamespace(
+        get_repo=lambda name: SimpleNamespace(get_issue=lambda number: issue))
+    return gateway
+
+
+def put(issue: FakeIssue, comment_id: int | None, marker: str | None = COMMENT_MARKER) -> int:
+    return gateway_on(issue).put_comment("octo/app", 7, "new", comment_id, marker=marker)
+
+
+def test_the_comment_is_edited_by_its_id():
+    ours = FakeComment(5, f"old\n{COMMENT_MARKER}")
+    issue = FakeIssue(ours)
+    assert put(issue, 5) == 5
+    assert ours.edited == "new" and issue.created == []
+
+
+def test_a_deleted_comment_is_posted_again():
+    issue = FakeIssue()
+    assert put(issue, 5) == 999
+    assert issue.created == ["new"]
+
+
+def test_without_its_id_the_comment_is_found_by_its_marker():
+    # a fresh database each time, as in GitHub Actions: without this every run adds a comment
+    person = FakeComment(1, f"quoting it: {COMMENT_MARKER}", kind="User")
+    other_bot = FakeComment(2, "coverage went up")
+    ours = FakeComment(3, f"old\n{COMMENT_MARKER}")
+    issue = FakeIssue(person, other_bot, ours)
+    assert put(issue, None) == 3
+    assert (person.edited, other_bot.edited, ours.edited) == (None, None, "new")
+    assert issue.created == []
+
+
+def test_a_marked_comment_this_token_cant_edit_is_left_alone():
+    # another bot's, e.g. the GitHub App's when the Actions workflow runs too
+    refused = GithubException(403, {"message": "Resource not accessible by integration"}, None)
+    theirs = FakeComment(4, f"old\n{COMMENT_MARKER}", error=refused)
+    issue = FakeIssue(theirs)
+    assert put(issue, None) == 999
+    assert issue.created == ["new"]
+
+
+def test_other_errors_editing_the_comment_are_raised():
+    broken = FakeComment(3, f"old\n{COMMENT_MARKER}",
+                         error=GithubException(502, {"message": "Bad gateway"}, None))
+    with pytest.raises(GithubException):
+        put(FakeIssue(broken), None)
+
+
+def test_without_a_marker_or_an_id_a_new_comment_is_posted():
+    ours = FakeComment(3, f"old\n{COMMENT_MARKER}")
+    issue = FakeIssue(ours)
+    assert put(issue, None, marker=None) == 999
+    assert ours.edited is None
+
+
+def test_only_the_first_comments_are_searched():
+    late = FakeComment(MAX_COMMENTS + 1, f"old\n{COMMENT_MARKER}")
+    issue = FakeIssue(*[FakeComment(n, "chatter", kind="User") for n in range(MAX_COMMENTS)],
+                      late)
+    assert put(issue, None) == 999 and late.edited is None

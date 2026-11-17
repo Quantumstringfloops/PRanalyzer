@@ -138,6 +138,7 @@ class FakeGateway:
         self.pr_files = pr_files if pr_files is not None else ["src/app.py"]
         self.comment_error = comment_error
         self.comments: dict[int, str] = {}
+        self.markers: list[str | None] = []   # how each comment would find the one before it
         self.calls: list[tuple] = []
         self.closed = False
 
@@ -179,8 +180,9 @@ class FakeGateway:
         self.calls.append(("pull_files", number))
         return self.pr_files[:limit]
 
-    def put_comment(self, repo, number, body, comment_id) -> int:
+    def put_comment(self, repo, number, body, comment_id, marker=None) -> int:
         self.calls.append(("comment", number, comment_id))
+        self.markers.append(marker)
         if self.comment_error is not None:
             raise self.comment_error
         posted = comment_id if comment_id is not None else 900 + len(self.comments)

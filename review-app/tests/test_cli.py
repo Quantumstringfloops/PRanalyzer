@@ -5,6 +5,7 @@ from conftest import FakeAccess, FakeAnalyzer, FakeGateway, make_pull, merged_pu
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
+from github import GithubException
 from pr_analyzer.config import Settings as AnalyzerSettings
 from typer.testing import CliRunner
 
@@ -178,6 +179,22 @@ def test_outcome_comments_when_asked(monkeypatch):
     # merged on 8 November, more than the 7-day watch ago: the verdict is final
     assert "✅ Held up: no CI failure, revert or follow-up fix  (final)" in result.output
     assert "### review-app: after the merge" in gateway.comments[900]
+    assert "Comment: https://github.com/octo/app/pull/7#issuecomment-900" in result.output
+
+
+def test_outcome_fails_when_the_comment_cant_be_posted(monkeypatch):
+    # in GitHub Actions a red run is the only sign of it: the database is thrown away
+    refused = GithubException(403, {"message": "Resource not accessible by integration"},
+                              None)
+    gateway = FakeGateway(merged_pull(), checks=[CheckResult("test", "passed")],
+                          comment_error=refused)
+    monkeypatch.setattr(cli, "TokenAccess", lambda token: FakeAccess(gateway, checks=False))
+    result = runner.invoke(cli.app, ["outcome", "https://github.com/octo/app/pull/7",
+                                     "--comment"])
+    assert result.exit_code == 1
+    assert "✅ Held up" in result.output                 # the outcome is still printed
+    assert "Couldn't post the comment on octo/app#7" in result.output
+    assert "Resource not accessible by integration" in result.output
 
 
 def test_outcome_of_a_pr_that_was_not_merged(monkeypatch):

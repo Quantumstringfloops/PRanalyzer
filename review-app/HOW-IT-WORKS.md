@@ -224,6 +224,11 @@ the window ends. It also looks whenever CI on the merge commit finishes.
 date. It comments as soon as something goes wrong, and when the watch ends. Policy keys:
 `track_outcomes`, `outcome_window_days`, `outcome_comment`.
 
+**Without a GitHub App:** this repository runs the same watch in GitHub Actions, in the Merge
+outcome workflow. It comments as github-actions[bot] right after each merge into `main`,
+updates that comment when `main`'s CI finishes, and looks again every day for a week. Each run
+starts from scratch, so it finds its earlier comment by a hidden marker and edits it.
+
 **One limit:** reverts and fixes are found from commit messages. A fix described without any of
 those words isn't recognised as one.
 

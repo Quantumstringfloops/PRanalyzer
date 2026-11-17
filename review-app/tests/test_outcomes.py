@@ -236,6 +236,8 @@ def test_the_comment_is_updated_in_place_and_only_when_it_changes(store, queue):
     assert row["assessment"] == "reverted"
     assert [c for c in gateway.calls if c[0] == "comment"][-1] == ("comment", 7, 900)
     assert row["looks"] == 3
+    # and with no id (a fresh database), GitHub is searched for the comment by its marker
+    assert gateway.markers == [COMMENT_MARKER, COMMENT_MARKER]
 
 
 def test_with_a_token_it_comments_only_when_asked(store, queue):
