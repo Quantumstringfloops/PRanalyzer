@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # demo only: CI on the throwaway branch's merge commits, as on main's
+    branches: [main, review-app-demo/base]
   pull_request:
     branches: [main]
 

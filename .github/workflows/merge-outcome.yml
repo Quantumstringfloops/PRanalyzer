@@ -18,7 +18,8 @@ name: Merge outcome
 on:
   pull_request_target:
     types: [closed]
-    branches: [main]
+    # demo only: the throwaway branch review-app-demo/base stands in for main
+    branches: [main, review-app-demo/base]
   workflow_run:
     workflows: [CI]
     types: [completed]
