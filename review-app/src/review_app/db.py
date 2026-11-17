@@ -14,9 +14,55 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 GENESIS_HASH = "0" * 64
 MAX_TEXT = 2000   # longest error or message kept in a detail field
+
+JOBS_TABLE = """
+CREATE TABLE jobs (
+    id              INTEGER PRIMARY KEY,
+    kind            TEXT NOT NULL CHECK (kind IN ('analyze', 'merge', 'outcome')),
+    repo            TEXT NOT NULL COLLATE NOCASE,
+    pr_number       INTEGER NOT NULL,
+    head_sha        TEXT NOT NULL DEFAULT '',
+    installation_id INTEGER,
+    status          TEXT NOT NULL,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    run_after       TEXT NOT NULL,
+    locked_until    TEXT,
+    last_error      TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX jobs_ready ON jobs (status, run_after);
+CREATE INDEX jobs_by_pr ON jobs (repo, pr_number, status);
+"""
+# how each merged PR turned out (outcomes.py): one row per PR, updated at every look
+MERGE_OUTCOMES_TABLE = """
+CREATE TABLE merge_outcomes (
+    id             INTEGER PRIMARY KEY,
+    pr_id          INTEGER NOT NULL UNIQUE REFERENCES pull_requests(id),
+    merge_sha      TEXT NOT NULL,
+    merged_at      TEXT NOT NULL,
+    base_branch    TEXT NOT NULL,
+    assessment     TEXT NOT NULL,
+    ci_state       TEXT NOT NULL,
+    ci             TEXT NOT NULL DEFAULT '{}',
+    revert_sha     TEXT,
+    revert_subject TEXT,
+    follow_ups     TEXT NOT NULL DEFAULT '[]',
+    decision_id    INTEGER REFERENCES decisions(id),
+    verdict        TEXT,
+    verdict_call   TEXT NOT NULL,
+    final          INTEGER NOT NULL DEFAULT 0,
+    watch_until    TEXT NOT NULL,
+    comment_id     INTEGER,
+    looks          INTEGER NOT NULL DEFAULT 1,
+    checked_at     TEXT NOT NULL,
+    created_at     TEXT NOT NULL
+);
+CREATE INDEX merge_outcomes_by_sha ON merge_outcomes (merge_sha);
+"""
 
 SCHEMA = """
 CREATE TABLE repositories (
@@ -74,23 +120,7 @@ CREATE TABLE decisions (
     updated_at     TEXT NOT NULL
 );
 CREATE INDEX decisions_by_pr ON decisions (pr_id, id);
-CREATE TABLE jobs (
-    id              INTEGER PRIMARY KEY,
-    kind            TEXT NOT NULL CHECK (kind IN ('analyze', 'merge')),
-    repo            TEXT NOT NULL COLLATE NOCASE,
-    pr_number       INTEGER NOT NULL,
-    head_sha        TEXT NOT NULL DEFAULT '',
-    installation_id INTEGER,
-    status          TEXT NOT NULL,
-    attempts        INTEGER NOT NULL DEFAULT 0,
-    run_after       TEXT NOT NULL,
-    locked_until    TEXT,
-    last_error      TEXT,
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL
-);
-CREATE INDEX jobs_ready ON jobs (status, run_after);
-CREATE INDEX jobs_by_pr ON jobs (repo, pr_number, status);
+""" + JOBS_TABLE + """
 CREATE TABLE deliveries (
     id          TEXT PRIMARY KEY,
     event       TEXT NOT NULL,
@@ -113,7 +143,20 @@ CREATE TRIGGER audit_log_no_update BEFORE UPDATE ON audit_log
 BEGIN SELECT RAISE(ABORT, 'the audit log is append-only'); END;
 CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log
 BEGIN SELECT RAISE(ABORT, 'the audit log is append-only'); END;
-"""
+""" + MERGE_OUTCOMES_TABLE
+
+# For each schema version, the statements that bring a database from it to the next one.
+MIGRATIONS = {
+    # 1 → 2: the "outcome" job kind, and merge_outcomes. SQLite can't change a CHECK
+    # constraint in place, so jobs is rebuilt with its rows.
+    1: ("ALTER TABLE jobs RENAME TO jobs_v1;"
+        "DROP INDEX jobs_ready;"
+        "DROP INDEX jobs_by_pr;"
+        + JOBS_TABLE
+        + "INSERT INTO jobs SELECT * FROM jobs_v1;"
+        "DROP TABLE jobs_v1;"
+        + MERGE_OUTCOMES_TABLE),
+}
 
 
 def utcnow() -> datetime:
@@ -189,9 +232,14 @@ class Store:
             if version == 0:
                 conn.executescript("BEGIN;" + SCHEMA + f"PRAGMA user_version = {SCHEMA_VERSION};"
                                    "COMMIT;")
-            elif version != SCHEMA_VERSION:
+            elif version > SCHEMA_VERSION:
                 raise RuntimeError(f"{self.path} has schema version {version}; this build "
-                                   f"understands {SCHEMA_VERSION}")
+                                   f"understands up to {SCHEMA_VERSION}")
+            else:
+                # each step in its own transaction, so a failed step leaves the last good version
+                for step in range(version, SCHEMA_VERSION):
+                    conn.executescript("BEGIN;" + MIGRATIONS[step]
+                                       + f"PRAGMA user_version = {step + 1};COMMIT;")
         finally:
             conn.close()
 
@@ -351,3 +399,53 @@ class Store:
             row = conn.execute("SELECT installation_id FROM repositories WHERE full_name = ?",
                                (repo,)).fetchone()
             return row["installation_id"] if row else None
+
+    # ── after the merge ─────────────────────────────────────────────────────────────────
+    def save_merge_outcome(self, conn: sqlite3.Connection, pr_id: int,
+                           values: dict[str, Any]) -> int:
+        """Record a look at a merged PR: the first one inserts its row, later ones update it."""
+        row = {"pr_id": pr_id, "now": stamp(), **values,
+               "ci": to_json(values["ci"]), "follow_ups": to_json(values["follow_ups"]),
+               "final": int(values["final"])}
+        existing = conn.execute("SELECT id FROM merge_outcomes WHERE pr_id = ?",
+                                (pr_id,)).fetchone()
+        if existing is None:
+            cursor = conn.execute(
+                "INSERT INTO merge_outcomes (pr_id, merge_sha, merged_at, base_branch, assessment,"
+                " ci_state, ci, revert_sha, revert_subject, follow_ups, decision_id, verdict,"
+                " verdict_call, final, watch_until, checked_at, created_at) VALUES (:pr_id,"
+                " :merge_sha, :merged_at, :base_branch, :assessment, :ci_state, :ci, :revert_sha,"
+                " :revert_subject, :follow_ups, :decision_id, :verdict, :verdict_call, :final,"
+                " :watch_until, :now, :now)", row,
+            )
+            return int(cursor.lastrowid or 0)
+        conn.execute(
+            "UPDATE merge_outcomes SET merge_sha = :merge_sha, merged_at = :merged_at,"
+            " base_branch = :base_branch, assessment = :assessment, ci_state = :ci_state,"
+            " ci = :ci, revert_sha = :revert_sha, revert_subject = :revert_subject,"
+            " follow_ups = :follow_ups, decision_id = :decision_id, verdict = :verdict,"
+            " verdict_call = :verdict_call, final = :final, watch_until = :watch_until,"
+            " looks = looks + 1, checked_at = :now WHERE pr_id = :pr_id", row,
+        )
+        return int(existing["id"])
+
+    def merge_outcome(self, repo: str, number: int) -> sqlite3.Row | None:
+        with self.read() as conn:
+            return conn.execute(
+                "SELECT o.* FROM merge_outcomes o JOIN pull_requests p ON p.id = o.pr_id"
+                " WHERE p.repo = ? AND p.number = ?", (repo, number),
+            ).fetchone()
+
+    def set_outcome_comment(self, outcome_id: int, comment_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("UPDATE merge_outcomes SET comment_id = ? WHERE id = ?",
+                         (comment_id, outcome_id))
+
+    def watched_merges(self, repo: str, merge_sha: str) -> list[sqlite3.Row]:
+        """Merged PRs still being watched whose merge commit this is."""
+        with self.read() as conn:
+            return conn.execute(
+                "SELECT o.id, p.number FROM merge_outcomes o JOIN pull_requests p"
+                " ON p.id = o.pr_id WHERE p.repo = ? AND o.merge_sha = ? AND o.final = 0",
+                (repo, merge_sha),
+            ).fetchall()

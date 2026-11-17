@@ -1,5 +1,5 @@
 import pytest
-from conftest import NEW_SHA, SHA, audit_actions
+from conftest import NEW_SHA, SHA, audit_actions, make_pull
 
 from review_app.webhooks import (
     PayloadError,
@@ -10,6 +10,7 @@ from review_app.webhooks import (
 )
 
 SECRET = b"s3cret"
+MERGE_SHA = "m" * 40
 
 
 def pr_payload(action="opened", sha=SHA, state="open", merged=False, draft=False,
@@ -29,6 +30,8 @@ def pr_payload(action="opened", sha=SHA, state="open", merged=False, draft=False
         "repository": {"id": 1, "full_name": repo, "default_branch": "main"},
         "installation": {"id": installation},
     }
+    if merged:
+        payload["pull_request"].update(merge_commit_sha=MERGE_SHA, merged_at="2026-11-08T15:57:51Z")
     if changes is not None:
         payload["changes"] = changes
     return payload
@@ -117,7 +120,56 @@ def test_closing_a_pr_cancels_its_jobs(handler, store):
     assert jobs(store)[0][5] == "cancelled"
     with store.read() as conn:
         assert conn.execute("SELECT state FROM pull_requests").fetchone()[0] == "merged"
-    assert audit_actions(store) == ["job.queued", "pr.closed"]
+    # merged, so a look at how it turns out is queued, for once its CI has begun
+    assert jobs(store)[1] == ("outcome", "octo/app", 7, MERGE_SHA, 11, "queued")
+    assert audit_actions(store) == ["job.queued", "pr.closed", "job.queued"]
+
+
+def test_a_pr_closed_unmerged_is_not_watched(handler, store):
+    result = handler.handle("pull_request", "d-1", pr_payload("closed", state="closed"))
+    assert result.message == "closed" and jobs(store) == []
+
+
+def test_the_first_look_waits_for_ci_to_begin(handler, store):
+    handler.handle("pull_request", "d-1", pr_payload("closed", state="closed", merged=True))
+    with store.read() as conn:
+        run_after, created = conn.execute("SELECT run_after, created_at FROM jobs").fetchone()
+    assert run_after > created
+
+
+def watch(store, pr_id_number=7, sha=MERGE_SHA):
+    """A merge being watched, as the worker's first look leaves it."""
+    with store.transaction() as conn:
+        pr_id = store.upsert_pr(conn, make_pull(number=pr_id_number, state="merged"))
+        store.save_merge_outcome(conn, pr_id, {
+            "merge_sha": sha, "merged_at": "2026-11-08T15:57:51.000000Z", "base_branch": "main",
+            "assessment": "watching", "ci_state": "pending", "ci": {}, "revert_sha": None,
+            "revert_subject": None, "follow_ups": [], "decision_id": None, "verdict": None,
+            "verdict_call": "pending", "final": False,
+            "watch_until": "2026-11-15T15:57:51.000000Z"})
+
+
+@pytest.mark.parametrize(("event", "payload"), [
+    ("check_suite", {"action": "completed", "check_suite": {
+        "head_sha": MERGE_SHA, "conclusion": "failure", "app": {"id": 7}}}),
+    ("check_suite", {"action": "completed", "check_suite": {
+        "head_sha": MERGE_SHA, "conclusion": "success", "app": {"id": 7}}}),
+    ("status", {"state": "error", "sha": MERGE_SHA}),
+])
+def test_ci_finishing_on_a_watched_merge_brings_a_look(handler, store, event, payload):
+    watch(store)
+    handler.handle(event, "d-1", {**payload, "repository": {"full_name": "octo/app"},
+                                  "installation": {"id": 11}})
+    assert ("outcome", "octo/app", 7, MERGE_SHA, 11, "queued") in jobs(store)
+
+
+def test_ci_on_other_commits_brings_no_look(handler, store):
+    watch(store)
+    handler.handle("status", "d-1", {"state": "failure", "sha": "x" * 40,
+                                     "repository": {"full_name": "octo/app"}})
+    handler.handle("status", "d-2", {"state": "pending", "sha": MERGE_SHA,
+                                     "repository": {"full_name": "octo/app"}})
+    assert jobs(store) == []
 
 
 def test_a_fork_pr_is_analysed_but_marked(handler, store):

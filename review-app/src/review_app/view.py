@@ -53,6 +53,33 @@ SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 SEVERITY_TONES = {"CRITICAL": "critical", "HIGH": "serious", "MEDIUM": "warning"}
 JOB_TONES = {"queued": "neutral", "running": "info", "done": "good", "failed": "critical"}
 FAILED_ACTIONS = ("failed", "refused", "aborted", "gave_up")
+# after the merge (outcomes.py): how it turned out, and how review-app's call compares
+ASSESSMENT_LABELS = {"watching": "Watching", "healthy": "Held up", "fixed_later": "Fixed later",
+                     "ci_failing": "CI failing", "reverted": "Reverted"}
+ASSESSMENT_TONES = {"watching": "info", "healthy": "good", "fixed_later": "warning",
+                    "ci_failing": "critical", "reverted": "critical"}
+ASSESSMENT_GLYPHS = {"watching": "clock", "healthy": "check", "fixed_later": "alert",
+                     "ci_failing": "x", "reverted": "arrow-left"}
+CALL_LABELS = {"agreed": "Call held up", "warned": "Rightly held back", "missed": "Missed it",
+               "false_alarm": "Too strict", "fine": "Left to a person", "pending": "Too early",
+               "not_reviewed": "Not reviewed"}
+CALL_TONES = {"agreed": "good", "warned": "good", "missed": "critical", "false_alarm": "serious",
+              "fine": "neutral", "pending": "info", "not_reviewed": "none"}
+CI_LABELS = {"passing": "CI passing", "failing": "CI failing", "pending": "CI running",
+             "none": "no CI"}
+CI_TONES = {"passing": "good", "failing": "critical", "pending": "info", "none": "neutral"}
+
+
+def track_record(calls: Mapping[str, int]) -> dict[str, int | None]:
+    """How review-app's calls held up against what happened after the merge. Right: it said merge
+    and the merge held up, or it held a PR back that then ran into trouble. Wrong: it said merge
+    and the PR ran into trouble, or it blocked one that held up. Left-to-a-person and too-early
+    calls count neither way."""
+    held = calls.get("agreed", 0) + calls.get("warned", 0)
+    wrong = calls.get("missed", 0) + calls.get("false_alarm", 0)
+    judged = held + wrong
+    return {"held": held, "wrong": wrong, "judged": judged,
+            "rate": round(100 * held / judged) if judged else None}
 
 
 # ── times ────────────────────────────────────────────────────────────────────────────────

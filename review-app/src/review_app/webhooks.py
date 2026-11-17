@@ -8,9 +8,10 @@ import hmac
 from dataclasses import dataclass
 from typing import Any
 
-from review_app.db import Store
+from review_app.db import Store, utcnow
 from review_app.jobs import JobQueue
 from review_app.models import PullInfo
+from review_app.outcomes import FIRST_LOOK
 from review_app.policy import REPO_NAME
 
 ACTOR = "webhook"
@@ -107,6 +108,8 @@ def pull_from_payload(payload: dict[str, Any]) -> PullInfo:
         changed_files=_count(pr, "changed_files"),
         additions=_count(pr, "additions"),
         deletions=_count(pr, "deletions"),
+        merge_sha=str(pr.get("merge_commit_sha") or "") if pr.get("merged") else "",
+        merged_at=str(pr.get("merged_at") or "") if pr.get("merged") else "",
     )
 
 
@@ -149,7 +152,15 @@ class WebhookHandler:
             cancelled = self.queue.cancel_for_pr(pull.repo, pull.number)
             self.store.audit(ACTOR, "pr.closed", pull.repo, pull.number, pull.head_sha,
                              merged=pull.state == "merged", cancelled_jobs=cancelled)
-            return WebhookResult(202, "closed")
+            if pull.state != "merged":
+                return WebhookResult(202, "closed")
+            # merged: start watching how it turns out, once its CI on the base branch has begun
+            job_id = self.queue.enqueue("outcome", pull.repo, pull.number, pull.merge_sha,
+                                        installation, run_after=utcnow() + FIRST_LOOK)
+            if job_id is not None:
+                self.store.audit(ACTOR, "job.queued", pull.repo, pull.number, pull.merge_sha,
+                                 job=job_id, kind="outcome", trigger="pull_request.closed")
+            return WebhookResult(202, "merged; watching how it turns out", job_id)
         base_changed = action == "edited" and "base" in (payload.get("changes") or {})
         if action not in ANALYZE_ACTIONS and not base_changed:
             return WebhookResult(202, f"nothing to do for pull_request.{action}")
@@ -197,6 +208,9 @@ class WebhookHandler:
 
     def _check_suite(self, payload: dict[str, Any]) -> WebhookResult:
         suite = _dict(payload, "check_suite")
+        if payload.get("action") == "completed":
+            # passed or failed, CI on a watched merge commit is worth another look
+            self._look_again(payload, _str(suite, "head_sha"), "check_suite.completed")
         if payload.get("action") != "completed" or suite.get("conclusion") not in PASSING_CHECKS:
             return WebhookResult(202, "nothing to do for this check suite")
         app = suite.get("app")
@@ -205,9 +219,30 @@ class WebhookHandler:
         return self._checks_passed(payload, _str(suite, "head_sha"), "check_suite.completed")
 
     def _status(self, payload: dict[str, Any]) -> WebhookResult:
-        if payload.get("state") != "success":
+        state = payload.get("state")
+        if state in ("success", "failure", "error"):
+            self._look_again(payload, _str(payload, "sha"), f"status.{state}")
+        if state != "success":
             return WebhookResult(202, "nothing to do for this status")
         return self._checks_passed(payload, _str(payload, "sha"), "status.success")
+
+    def _look_again(self, payload: dict[str, Any], sha: str, trigger: str) -> int:
+        """Merged PRs still watched whose merge commit this is get a look now."""
+        if not sha:
+            return 0
+        repo = repo_name(_dict(payload, "repository"))
+        watched = self.store.watched_merges(repo, sha)
+        if not watched:
+            return 0
+        installation = installation_id(payload) or self.store.repo_installation(repo)
+        queued = 0
+        for row in watched:
+            job_id = self.queue.enqueue("outcome", repo, row["number"], sha, installation)
+            if job_id is not None:
+                queued += 1
+                self.store.audit(ACTOR, "job.queued", repo, row["number"], sha, job=job_id,
+                                 kind="outcome", trigger=trigger)
+        return queued
 
     def _checks_passed(self, payload: dict[str, Any], sha: str, trigger: str) -> WebhookResult:
         """Merges GitHub held back for pending checks on this commit get another try."""

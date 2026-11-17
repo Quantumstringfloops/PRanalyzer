@@ -68,6 +68,11 @@ class Policy(BaseModel):
     team_reviewers: tuple[TeamSlug, ...] = ()
     # post pr-analyzer's review, with its inline comments, on the PR
     post_review: bool = True
+    # after a merge: watch how the PR turns out (CI on the merge commit, reverts, follow-up
+    # fixes) for this many days, and keep one comment on the PR up to date with it
+    track_outcomes: bool = True
+    outcome_window_days: int = Field(default=7, ge=1, le=90)
+    outcome_comment: bool = True
 
     @model_validator(mode="after")
     def _consistent(self) -> "Policy":

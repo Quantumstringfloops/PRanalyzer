@@ -1126,3 +1126,9 @@ tbody tr:hover { background: color-mix(in oklch, var(--chart-2) 8%, transparent)
 .w84 { width: 84%; } .w85 { width: 85%; } .w86 { width: 86%; } .w87 { width: 87%; } .w88 { width: 88%; } .w89 { width: 89%; }
 .w90 { width: 90%; } .w91 { width: 91%; } .w92 { width: 92%; } .w93 { width: 93%; } .w94 { width: 94%; } .w95 { width: 95%; }
 .w96 { width: 96%; } .w97 { width: 97%; } .w98 { width: 98%; } .w99 { width: 99%; } .w100 { width: 100%; }
+
+/* ── after the merge ───────────────────────────────────────────────────────────────────── */
+.after-card { border-color: color-mix(in oklch, var(--tone) 30%, var(--border)); }
+.after-headline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 14px; }
+.after-card .gates dd > div + div { margin-top: 4px; }
+.after-note { margin-top: 10px; }

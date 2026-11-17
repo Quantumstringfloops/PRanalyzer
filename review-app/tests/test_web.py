@@ -2,10 +2,12 @@
 import json
 import re
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from conftest import (
+    MERGE_SHA,
     NEW_SHA,
     SHA,
     FakeAccess,
@@ -15,6 +17,7 @@ from conftest import (
     make_outcome,
     make_pull,
     make_result,
+    merged_pull,
 )
 from fastapi.testclient import TestClient
 from pr_analyzer.models import FileChange
@@ -24,6 +27,7 @@ from test_webhooks import pr_payload
 import review_app
 from review_app import web
 from review_app.db import Store
+from review_app.outcomes import CheckResult, CommitInfo
 from review_app.policy import Policy, PolicyBook
 from review_app.settings import AppSettings
 from review_app.web import SECURITY_HEADERS, create_dashboard_app, create_webhook_app, host_name
@@ -556,13 +560,57 @@ def test_no_page_needs_what_the_csp_blocks(store, queue):
     run_one_pr(store, queue, outcome=outcome)
     queue.enqueue("analyze", "octo/app", 8, SHA, 11)
     client = dashboard(store, health=[("semgrep", True, "/usr/bin/semgrep")])
+    look_after_merge(store, queue)
     for path in ("/", "/repos/octo/app", "/prs/1", "/audit", "/jobs", "/prs/999", "/findings",
                  "/findings?severity=high&q=x", "/triage", "/repos", "/standards", "/map",
-                 "/config", "/integrations", "/search?q=helper"):
+                 "/config", "/integrations", "/search?q=helper", "/outcomes",
+                 "/outcomes?assessment=ci_failing"):
         page = client.get(path).text
         assert "<script" not in page and "<style" not in page, path
         assert not re.search(r"\sstyle=", page), path
         assert 'href="/static/style.css"' in page, path
+
+
+# ── after the merge ──────────────────────────────────────────────────────────────────────
+def look_after_merge(store, queue, checks=None, commits=None):
+    """octo/app#7, decided on as merge, then merged, then looked at once."""
+    run_one_pr(store, queue)
+    queue.enqueue("outcome", "octo/app", 7, MERGE_SHA, 11)
+    gateway = FakeGateway(merged_pull(), checks=checks or [CheckResult("test", "failed")],
+                          commits=commits or [])
+    Worker(store, queue, PolicyBook(), FakeAnalyzer(), FakeAccess(gateway),
+           clock=lambda: datetime(2026, 11, 8, 16, 10, tzinfo=UTC)).run_once()
+
+
+def test_the_outcomes_page(store, queue):
+    look_after_merge(store, queue)
+    client = dashboard(store)
+    page = client.get("/outcomes").text
+    assert 'href="/prs/1">Add a helper</a>' in page
+    assert "CI failing" in page and "said Merge · Missed it" in page
+    assert "watching until 2026-11-15" in page
+    assert '<strong class="kpi-value">0%</strong>' in page          # 0 of 1 calls held up
+    reverted = client.get("/outcomes", params={"assessment": "reverted"}).text
+    assert 'href="/prs/1"' not in reverted and "None reverted" in reverted
+    assert client.get("/outcomes", params={"assessment": "nonsense"}).status_code == 200
+
+
+def test_a_merged_prs_page_shows_how_it_turned_out(store, queue):
+    revert = CommitInfo("e" * 40, "Reverts octo/app#7")
+    look_after_merge(store, queue, checks=[CheckResult("test", "passed")], commits=[revert])
+    page = dashboard(store).get("/prs/1").text
+    assert "After the merge" in page and "Reverted" in page
+    assert f'href="https://github.com/octo/app/commit/{"e" * 40}"' in page
+    assert "Missed it" in page
+
+
+def test_the_overview_counts_merge_outcomes(store, queue):
+    look_after_merge(store, queue)
+    page = dashboard(store).get("/").text
+    assert 'href="/outcomes">All outcomes' in page
+    assert "review-app's calls held up 0% of the time (0 of 1)." in page
+    assert re.findall(r'<a href="(/outcomes)"( aria-current="page")?>', page) == [
+        ("/outcomes", "")]                                       # in the nav, not current
 
 
 @pytest.mark.parametrize(("header", "name"), [

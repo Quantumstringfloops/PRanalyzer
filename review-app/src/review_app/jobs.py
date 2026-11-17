@@ -20,7 +20,7 @@ STATUSES = ("queued", "running", "done", "failed", "superseded", "cancelled")
 @dataclass(frozen=True)
 class Job:
     id: int
-    kind: str              # "analyze" | "merge"
+    kind: str              # "analyze" | "merge" | "outcome" (a look at a merged PR)
     repo: str
     pr_number: int
     head_sha: str
@@ -41,9 +41,11 @@ class JobQueue:
         return stamp(self.clock())
 
     def enqueue(self, kind: str, repo: str, pr_number: int, head_sha: str,
-                installation_id: int | None) -> int | None:
-        """Queue a job; None when the same job is already waiting."""
+                installation_id: int | None, run_after: datetime | None = None) -> int | None:
+        """Queue a job, to run now or from `run_after`; None when the same job is already
+        waiting (it's then brought forward if this one would run sooner)."""
         now = self._now()
+        start = stamp(run_after) if run_after is not None else now
         with self.store.transaction() as conn:
             if kind == "analyze":
                 # the newest push wins: an older head's analysis would be wasted work
@@ -57,11 +59,13 @@ class JobQueue:
                 " AND status = 'queued'", (kind, repo, pr_number, head_sha),
             ).fetchone()
             if duplicate:
+                conn.execute("UPDATE jobs SET run_after = ?, updated_at = ? WHERE id = ?"
+                             " AND run_after > ?", (start, now, duplicate["id"], start))
                 return None
             cursor = conn.execute(
                 "INSERT INTO jobs (kind, repo, pr_number, head_sha, installation_id, status,"
                 " run_after, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
-                (kind, repo, pr_number, head_sha, installation_id, now, now, now),
+                (kind, repo, pr_number, head_sha, installation_id, start, now, now),
             )
             return int(cursor.lastrowid or 0)
 

@@ -55,6 +55,7 @@ Non-goals for now:
 | `worker.py` | Claims jobs and runs analyze → decide → act |
 | `web.py` | Two FastAPI apps: the webhook receiver and the read-only dashboard |
 | `view.py` | The dashboard's labels, tones, relative times and grouping of findings, as pure functions |
+| `outcomes.py` | After a merge: CI on the merge commit, reverts, follow-up fixes, the result, and the PR comment, as pure functions |
 | `auth.py` | Dashboard login: Supabase Auth's REST API, the access-token check, the allowlist, throttling |
 | `cli.py` | `review-app webhook / dashboard / worker / analyze / check-config / audit-verify` |
 
@@ -220,13 +221,50 @@ three factors, each shown on the dashboard:
 - **Fail closed everywhere.** An invalid `review-app.toml` stops the app. A failed analysis
   means needs review. Errors from GitHub are recorded and retried, and never turn into a merge.
 
+## After the merge (outcome tracking)
+
+A decision is a prediction, so review-app checks it against what happened. The flow:
+1. **Start.** A `pull_request.closed` webhook with `merged: true` queues an `outcome` job, keyed
+   on the merge commit, 10 minutes later.
+2. **Each look:**
+   - reads the PR again;
+   - sums up the check runs and commit statuses on the merge commit (not review-app's own);
+   - lists the base branch's commits since the merge (up to 200);
+   - finds a revert by its standard messages;
+   - for at most 15 commits whose subject looks like a fix, fetches their files and checks them
+     against the PR's.
+3. **Result and record.** `outcomes.assess` gives watching / healthy / fixed_later / ci_failing /
+   reverted. `outcomes.judge` sets that against the PR's latest decision (agreed, warned,
+   missed, false_alarm, fine, pending, not_reviewed). One `merge_outcomes` row per PR is
+   updated at each look, and audited as `outcome.checked`.
+4. **Next look.**
+   - While inside the window (`outcome_window_days`, 7 by default): 15 minutes later if CI is
+     still running, otherwise the next day.
+   - Also immediately when a check suite or status completes on a watched merge commit. The
+     queue brings a waiting job forward instead of adding another.
+   - The look at or after the end of the window is final.
+5. **The comment.** Running as the GitHub App, with `outcome_comment` on, one comment on the PR
+   is kept up to date (its id is stored, and it's edited in place). It's written when the PR runs
+   into trouble or the watch ends, and only when that changes. A failed comment is audited and
+   tried again at the next look.
+6. **By hand.** `review-app outcome <PR URL>` does one look with `GITHUB_TOKEN`, queues nothing,
+   and comments only with `--comment`.
+
+Revert and fix detection read commit messages: a fix without fix-like words in its subject
+isn't seen. Nothing here can merge, revert or change code. It reads, records and comments.
+
 ## Data
 
 SQLite in WAL mode. Tables: `repositories`, `pull_requests`, `analyses` (score, grade,
 findings, warnings), `decisions` (decision, confidence, reasons, the policy and facts used, the
-outcome), `jobs`, `deliveries`, and `audit_log`. Triggers make the audit log append-only. Each
-row also stores the SHA-256 of the previous row's hash plus its own content, so
-`review-app audit-verify` can detect edits made outside the app.
+outcome), `jobs`, `deliveries`, `merge_outcomes` (how each merged PR turned out) and
+`audit_log`. Triggers make the audit log append-only. Each row also stores the SHA-256 of the
+previous row's hash plus its own content, so `review-app audit-verify` can detect edits made
+outside the app.
+
+Schema version 2 added the `outcome` job kind and `merge_outcomes`. `Store.init` migrates a
+version-1 database in place: `jobs` is rebuilt with its rows, since SQLite can't change a CHECK
+constraint. Each step runs in its own transaction.
 
 ## Configuration
 

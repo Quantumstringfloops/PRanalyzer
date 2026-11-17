@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from conftest import FakeAccess, FakeAnalyzer, FakeGateway, make_pull
+from conftest import FakeAccess, FakeAnalyzer, FakeGateway, make_pull, merged_pull
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from review_app import cli
 from review_app.db import Store
+from review_app.outcomes import CheckResult, CommitInfo
 from review_app.settings import AppSettings, use_nvidia_by_default
 
 runner = CliRunner()
@@ -146,6 +147,45 @@ def test_analyze_decides_but_never_merges(monkeypatch):
     assert analyzer.calls[0]["post_review"] is False
     with Store("review-app.db").read() as conn:
         assert conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0   # never queued
+
+
+def test_outcome_looks_once_and_prints_it(monkeypatch):
+    # even where the policy has outcome tracking off: asking for it is enough
+    Path("review-app.toml").write_text("[defaults]\ntrack_outcomes = false\n")
+    gateway = FakeGateway(
+        merged_pull(), checks=[CheckResult("test", "failed"), CheckResult("lint", "passed")],
+        commits=[CommitInfo("f" * 40, "fix: the helper")], files={"f" * 40: ["src/app.py"]})
+    monkeypatch.setattr(cli, "TokenAccess", lambda token: FakeAccess(gateway, checks=False))
+
+    result = runner.invoke(cli.app, ["outcome", "https://github.com/octo/app/pull/7"])
+
+    assert result.exit_code == 0, result.output
+    assert "❌ CI is failing on the merge commit" in result.output
+    assert "CI on ddddddd: failing (failed: test)" in result.output
+    assert "fffffff fix: the helper (src/app.py)" in result.output
+    assert "review-app's call: no decision: no decision recorded" in result.output
+    assert "comment" not in gateway.names()          # not without --comment
+    with Store("review-app.db").read() as conn:     # one look, nothing queued to come back
+        assert conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
+
+
+def test_outcome_comments_when_asked(monkeypatch):
+    gateway = FakeGateway(merged_pull(), checks=[CheckResult("test", "passed")])
+    monkeypatch.setattr(cli, "TokenAccess", lambda token: FakeAccess(gateway, checks=False))
+    result = runner.invoke(cli.app, ["outcome", "https://github.com/octo/app/pull/7",
+                                     "--comment"])
+    assert result.exit_code == 0, result.output
+    # merged on 8 November, more than the 7-day watch ago: the verdict is final
+    assert "✅ Held up: no CI failure, revert or follow-up fix  (final)" in result.output
+    assert "### review-app: after the merge" in gateway.comments[900]
+
+
+def test_outcome_of_a_pr_that_was_not_merged(monkeypatch):
+    gateway = FakeGateway(make_pull(state="closed"))
+    monkeypatch.setattr(cli, "TokenAccess", lambda token: FakeAccess(gateway, checks=False))
+    result = runner.invoke(cli.app, ["outcome", "https://github.com/octo/app/pull/7"])
+    assert result.exit_code == 1
+    assert "may not be merged" in result.output
 
 
 def test_audit_verify():

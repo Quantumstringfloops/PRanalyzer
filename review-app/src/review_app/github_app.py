@@ -6,15 +6,19 @@ tokens are cached until five minutes before they expire."""
 import threading
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from itertools import islice
 from typing import Protocol
 
 from github import Auth, Github, GithubException, GithubIntegration, RateLimitExceededException
 from github.PullRequest import PullRequest
 
 from review_app.models import MergeResult, PullInfo
+from review_app.outcomes import CheckResult, CommitInfo, check_run_state, status_state
 
 CHECK_NAME = "review-app"   # the check run's name; branch protection can require it
 TIMEOUT_SECONDS = 30
+MAX_CHECK_RUNS = 100
 REFRESH_MARGIN_SECONDS = 300
 # merge API answers that mean "not merged", not "something broke": not allowed (403), gone (404),
 # not mergeable, e.g. protections or checks (405), the head moved (409), invalid (422)
@@ -28,6 +32,13 @@ class GitHubGateway(Protocol):
     def merge(self, repo: str, number: int, sha: str, method: str, title: str) -> MergeResult: ...
     def request_reviewers(self, repo: str, number: int, users: list[str],
                           teams: list[str]) -> None: ...
+    # after the merge (outcomes.py)
+    def commit_checks(self, repo: str, sha: str) -> list[CheckResult]: ...
+    def commits_since(self, repo: str, branch: str, since: datetime,
+                      limit: int) -> list[CommitInfo]: ...
+    def commit_files(self, repo: str, sha: str) -> list[str]: ...
+    def pull_files(self, repo: str, number: int, limit: int) -> list[str]: ...
+    def put_comment(self, repo: str, number: int, body: str, comment_id: int | None) -> int: ...
     def close(self) -> None: ...
 
 
@@ -62,7 +73,13 @@ def pull_from_api(repo: str, pr: PullRequest) -> PullInfo:
         changed_files=pr.changed_files,
         additions=pr.additions,
         deletions=pr.deletions,
+        merge_sha=(pr.merge_commit_sha or "") if pr.merged else "",
+        merged_at=iso(pr.merged_at) if pr.merged and pr.merged_at else "",
     )
+
+
+def iso(moment: datetime) -> str:
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class PyGithubGateway:
@@ -109,6 +126,42 @@ class PyGithubGateway:
     def request_reviewers(self, repo: str, number: int, users: list[str],
                           teams: list[str]) -> None:
         self._pull(repo, number).create_review_request(reviewers=users, team_reviewers=teams)
+
+    # ── after the merge ─────────────────────────────────────────────────────────────────
+    def commit_checks(self, repo: str, sha: str) -> list[CheckResult]:
+        """Every check run and commit status on a commit, as passed / failed / pending."""
+        commit = self._github.get_repo(repo).get_commit(sha)
+        results = [CheckResult(run.name, check_run_state(run.status, run.conclusion))
+                   for run in islice(commit.get_check_runs(), MAX_CHECK_RUNS)]
+        results += [CheckResult(status.context, status_state(status.state))
+                    for status in commit.get_combined_status().statuses]
+        return results
+
+    def commits_since(self, repo: str, branch: str, since: datetime,
+                      limit: int) -> list[CommitInfo]:
+        commits = self._github.get_repo(repo).get_commits(sha=branch, since=since)
+        return [CommitInfo(c.sha, c.commit.message or "",
+                           iso(c.commit.author.date) if c.commit.author else "")
+                for c in islice(commits, limit)]
+
+    def commit_files(self, repo: str, sha: str) -> list[str]:
+        return [f.filename for f in self._github.get_repo(repo).get_commit(sha).files]
+
+    def pull_files(self, repo: str, number: int, limit: int) -> list[str]:
+        return [f.filename for f in islice(self._pull(repo, number).get_files(), limit)]
+
+    def put_comment(self, repo: str, number: int, body: str, comment_id: int | None) -> int:
+        """Post a comment on the PR, or edit the one posted before; returns its id."""
+        issue = self._github.get_repo(repo).get_issue(number)
+        if comment_id is not None:
+            try:
+                comment = issue.get_comment(comment_id)
+                comment.edit(body)
+                return comment.id
+            except GithubException as e:
+                if e.status != 404:   # deleted since: post a new one
+                    raise
+        return issue.create_comment(body).id
 
 
 @dataclass
