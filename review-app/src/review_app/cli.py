@@ -280,6 +280,24 @@ def outcome(
         typer.echo(f"    - {fix['sha'][:7]} {fix['subject']} ({', '.join(fix['files'])})")
     verdict = VERDICT_TEXT.get(row["verdict"] or "", "no decision")
     typer.echo(f"  review-app's call: {verdict}: {CALL_TEXT[row['verdict_call']]}")
+    if comment:
+        action, details = last_comment(store, repo, number)
+        if action != "outcome.commented":
+            fail(f"Couldn't post the comment on {repo}#{number}: "
+                 f"{details.get('error', 'no attempt was recorded')}")
+        typer.echo(f"  Comment: https://github.com/{repo}/pull/{number}"
+                   f"#issuecomment-{details['comment']}")
+
+
+def last_comment(store: Store, repo: str, number: int) -> tuple[str, dict]:
+    """The last try at the "after the merge" comment on a PR, from the audit log: its action
+    (outcome.commented or outcome.comment_failed) and details."""
+    with store.read() as conn:
+        row = conn.execute(
+            "SELECT action, details FROM audit_log WHERE repo = ? AND pr_number = ?"
+            " AND action IN ('outcome.commented', 'outcome.comment_failed')"
+            " ORDER BY id DESC LIMIT 1", (repo, number)).fetchone()
+    return (row["action"], json.loads(row["details"])) if row else ("", {})
 
 
 @app.command("check-config")

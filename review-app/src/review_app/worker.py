@@ -363,7 +363,8 @@ class Worker:
     def _comment(self, gateway: GitHubGateway, pull: PullInfo, outcome_id: int, body: str,
                  comment_id: int | None) -> None:
         try:
-            posted = gateway.put_comment(pull.repo, pull.number, body, comment_id)
+            posted = gateway.put_comment(pull.repo, pull.number, body, comment_id,
+                                         marker=outcomes.COMMENT_MARKER)
         except GITHUB_ERRORS as e:
             # the outcome is recorded either way; the next look tries the comment again
             self.store.audit(self.actor, "outcome.comment_failed", pull.repo, pull.number,

@@ -19,6 +19,7 @@ from review_app.outcomes import CheckResult, CommitInfo, check_run_state, status
 CHECK_NAME = "review-app"   # the check run's name; branch protection can require it
 TIMEOUT_SECONDS = 30
 MAX_CHECK_RUNS = 100
+MAX_COMMENTS = 300   # a PR's comments read when looking for the one review-app posted before
 REFRESH_MARGIN_SECONDS = 300
 # merge API answers that mean "not merged", not "something broke": not allowed (403), gone (404),
 # not mergeable, e.g. protections or checks (405), the head moved (409), invalid (422)
@@ -38,7 +39,8 @@ class GitHubGateway(Protocol):
                       limit: int) -> list[CommitInfo]: ...
     def commit_files(self, repo: str, sha: str) -> list[str]: ...
     def pull_files(self, repo: str, number: int, limit: int) -> list[str]: ...
-    def put_comment(self, repo: str, number: int, body: str, comment_id: int | None) -> int: ...
+    def put_comment(self, repo: str, number: int, body: str, comment_id: int | None,
+                    marker: str | None = None) -> int: ...
     def close(self) -> None: ...
 
 
@@ -150,8 +152,13 @@ class PyGithubGateway:
     def pull_files(self, repo: str, number: int, limit: int) -> list[str]:
         return [f.filename for f in islice(self._pull(repo, number).get_files(), limit)]
 
-    def put_comment(self, repo: str, number: int, body: str, comment_id: int | None) -> int:
-        """Post a comment on the PR, or edit the one posted before; returns its id."""
+    def put_comment(self, repo: str, number: int, body: str, comment_id: int | None,
+                    marker: str | None = None) -> int:
+        """Post a comment on the PR, or edit the one posted before; returns its id.
+
+        Without that comment's id (a fresh database, as in GitHub Actions, where each run starts
+        empty), the comment posted before is found by `marker`: a bot's comment that carries it.
+        Only one this token can edit counts, so another bot's or a person's is left alone."""
         issue = self._github.get_repo(repo).get_issue(number)
         if comment_id is not None:
             try:
@@ -161,6 +168,18 @@ class PyGithubGateway:
             except GithubException as e:
                 if e.status != 404:   # deleted since: post a new one
                     raise
+        elif marker:
+            for comment in islice(issue.get_comments(), MAX_COMMENTS):
+                if comment.user is None or comment.user.type != "Bot":
+                    continue
+                if marker not in (comment.body or ""):
+                    continue
+                try:
+                    comment.edit(body)
+                    return comment.id
+                except GithubException as e:
+                    if e.status not in (403, 404):   # another bot's comment, or deleted since
+                        raise
         return issue.create_comment(body).id
 
 

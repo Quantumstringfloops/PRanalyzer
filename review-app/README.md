@@ -144,7 +144,26 @@ To look at any merged PR now, with `GITHUB_TOKEN`:
 ```
 
 It prints the result and records it for the dashboard. It posts nothing unless you add
-`--comment`.
+`--comment`. It then prints the comment's link, and fails if the comment couldn't be posted.
+
+### Without a GitHub App: the Merge outcome workflow
+
+This repository runs the same watch in GitHub Actions:
+[`.github/workflows/merge-outcome.yml`](../.github/workflows/merge-outcome.yml). It needs no
+GitHub App and no secret. It runs `review-app outcome --comment` with the workflow's own
+`GITHUB_TOKEN`, so its comment comes from **github-actions[bot]**.
+
+| When | What it does |
+|---|---|
+| A PR is merged into `main` | Looks right away, while CI on the merge commit is usually still running, and posts the comment |
+| `main`'s CI finishes on the merge commit | Looks again and updates the comment |
+| Every day at 04:23 UTC | Looks again at each PR merged in the last 8 days; the look after day 7 is final |
+| By hand: Actions → Merge outcome → Run workflow | Looks at the PR number you give |
+
+The GitHub App comments only once something goes wrong or the watch ends. The workflow comments
+from its first look, so you can see it at work. Each run starts with an empty database, so it
+finds the comment it posted before by the hidden `<!-- review-app:outcome -->` marker, and edits
+it in place.
 
 Revert and follow-up detection read commit messages, so a fix whose subject has none of those
 words isn't seen as one.

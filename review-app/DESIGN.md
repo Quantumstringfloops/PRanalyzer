@@ -248,7 +248,19 @@ A decision is a prediction, so review-app checks it against what happened. The f
    into trouble or the watch ends, and only when that changes. A failed comment is audited and
    tried again at the next look.
 6. **By hand.** `review-app outcome <PR URL>` does one look with `GITHUB_TOKEN`, queues nothing,
-   and comments only with `--comment`.
+   and comments only with `--comment`. It then prints the comment's link, and exits 1 if the
+   comment failed.
+7. **In GitHub Actions,** without a GitHub App. `.github/workflows/merge-outcome.yml` runs step 6
+   with `--comment` and the workflow's `GITHUB_TOKEN`, so the comment comes from
+   github-actions[bot]. It runs when a PR is merged into main (`pull_request_target: closed`),
+   when main's CI finishes on a push (`workflow_run`), daily for PRs merged in the last 8 days,
+   and by hand.
+   - Each run starts with an empty database, so the comment's id isn't known.
+     `PyGithubGateway.put_comment` then looks for `COMMENT_MARKER` in a bot's comment and edits
+     it. One that this token can't edit (another bot's) is left alone.
+   - The job is named `review-app`, so its own check run isn't counted as CI on the merge commit.
+   - It checks out main and never the PR's branch, holds no secret, and passes event data to its
+     scripts only through env.
 
 Revert and fix detection read commit messages: a fix without fix-like words in its subject
 isn't seen. Nothing here can merge, revert or change code. It reads, records and comments.
