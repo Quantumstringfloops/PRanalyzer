@@ -8,3 +8,7 @@ merged, github-actions[bot] should comment on it with "review-app: after the mer
 then update that same comment when CI on the merge commit finishes.
 
 Nothing here is meant for `main`. Both `review-app-demo/*` branches can be deleted after the demo.
+
+Second try: the first demo PR, #21, got no bot run. GitHub runs `pull_request_target` from
+`main`'s copy of a workflow, and `main` doesn't have the bot yet. The bot now starts from
+`pull_request`, which runs the merge commit's copy.
